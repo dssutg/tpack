@@ -10,6 +10,7 @@ import "core:slice"
 import "core:strings"
 import "core:unicode"
 
+import rp "../dssodinlib/rect_pack"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 
@@ -25,6 +26,8 @@ Options :: struct {
 	atlas_width:    int    `args:"name=width"`,
 	atlas_height:   int    `args:"name=height"`,
 	sprite_padding: int    `args:"name=sprite-padding"`,
+	heuristic:      string `args:"name=heuristic"`,
+	no_sort:        bool   `args:"name=no-sort"`,
 	map_format:     string `args:"name=map-format"`,
 	map_enum_prefix: string `args:"name=map-enum-prefix"`,
 	map_array_name:  string `args:"name=map-array-name"`,
@@ -36,6 +39,7 @@ main :: proc() {
 		atlas_width      = Default_Atlas_Width,
 		atlas_height     = Default_Atlas_Height,
 		sprite_padding   = Default_Sprite_Padding,
+		heuristic        = Default_Heuristic,
 		map_format       = Default_Map_Format,
 		map_enum_prefix  = Default_Map_Enum_Prefix,
 		map_array_name   = Default_Map_Array_Name,
@@ -58,14 +62,23 @@ main :: proc() {
 		os.exit(2)
 	}
 
+	heuristic: rp.Heuristic
+	heuristic, ok = heuristic_from_string(opt.heuristic)
+	if !ok {
+		fmt.eprintfln("%s: invalid heuristic. Valid: bl, bf", os.args[0])
+		os.exit(2)
+	}
+
 	err := pack_sprites_to_atlas({
-		dir            = opt.dir,
-		atlas_path     = opt.atlas_path,
+		dir             = opt.dir,
+		atlas_path      = opt.atlas_path,
 		sprite_map_path = opt.sprite_map,
-		atlas_width    = opt.atlas_width,
-		atlas_height   = opt.atlas_height,
-		sprite_padding = opt.sprite_padding,
-		map_format     = map_format,
+		atlas_width     = opt.atlas_width,
+		atlas_height    = opt.atlas_height,
+		sprite_padding  = opt.sprite_padding,
+		heuristic       = heuristic,
+		sort            = !opt.no_sort,
+		map_format      = map_format,
 		map_enum_prefix = opt.map_enum_prefix,
 		map_array_name  = opt.map_array_name,
 		map_array_type  = opt.map_array_type,
@@ -127,6 +140,14 @@ map_format_from_string :: proc(s: string) -> (format: Map_Format, ok: bool) {
 	return
 }
 
+heuristic_from_string :: proc(s: string) -> (h: rp.Heuristic, ok: bool) {
+	switch strings.to_lower(s) {
+	case "bl":  return .Skyline_default, true
+	case "bf":  return .Skyline_BF_sortHeight, true
+	}
+	return .Skyline_default, false
+}
+
 Min_Atlas_Width          := 8
 Default_Atlas_Width      := 2048
 Max_Atlas_Width          := 4096
@@ -137,6 +158,7 @@ Min_Sprite_Padding       := 0
 Default_Sprite_Padding   := 0
 Max_Sprite_Padding       := 128
 Default_Map_Format       := "auto"
+Default_Heuristic        := "bl"
 Default_Map_Enum_Prefix  := "SPRITE_"
 Default_Map_Array_Name   := "sprites"
 Default_Map_Array_Type   := "SDL_Rect"
@@ -148,6 +170,8 @@ Pack_Options :: struct {
 	atlas_width:     int,
 	atlas_height:    int,
 	sprite_padding:  int,
+	heuristic:       rp.Heuristic,
+	sort:            bool,
 	map_format:      Map_Format,
 	map_enum_prefix: string,
 	map_array_name:  string,
@@ -181,7 +205,7 @@ pack_sprites_to_atlas :: proc(opt: Pack_Options) -> (err: Error) {
 		return ferr
 	}
 
-	packed := pack_sprites_skyline(sprites, opt.atlas_width, opt.atlas_height, opt.sprite_padding)
+	packed := pack_sprites_skyline(sprites, opt.atlas_width, opt.atlas_height, opt.sprite_padding, opt.heuristic, opt.sort)
 	if packed != len(sprites) {
 		return Atlas_Too_Small_Error { sprites = sprites }
 	}
@@ -341,31 +365,29 @@ copy_sprite_to_atlas :: proc(src, dst: ^sdl.Surface, ox, oy: int) {
 	}
 }
 
-pack_sprites_skyline :: proc(sprites: []Sprite, atlas_width, atlas_height, padding: int) -> (packed: int) {
-	skyline := make([]int, atlas_width)
-	defer delete(skyline)
+pack_sprites_skyline :: proc(sprites: []Sprite, atlas_width, atlas_height, padding: int, heuristic: rp.Heuristic, should_sort: bool) -> (packed: int) {
+	packer: rp.Packer
+	rp.init(&packer, atlas_width, atlas_height, len(sprites), heuristic)
+	defer rp.destroy(&packer)
 
-	for &s in sprites {
-		best_x := -1
-		best_y := max(int)
-		size_x := int(s.surface.w) + padding
-		size_y := int(s.surface.h) + padding
-
-		for x := 0; x <= atlas_width - size_x; x += 1 {
-			y := slice.max(skyline[x:x + size_x])
-			if y + size_y <= atlas_height && y < best_y {
-				best_x = x
-				best_y = y
-			}
+	requests := make([]rp.Request, len(sprites))
+	defer delete(requests)
+	for s, i in sprites {
+		requests[i] = rp.Request {
+			w = int(s.surface.w) + padding * 2,
+			h = int(s.surface.h) + padding * 2,
 		}
+	}
 
-		if best_x != -1 {
-			s.offset = [2]int { best_x, best_y }
+	results, _ := rp.pack(&packer, requests, padding = 0, should_sort = should_sort)
+	defer delete(results)
+
+	for r, i in results {
+		s := &sprites[i]
+		if r.was_packed {
+			s.offset = [2]int{r.x, r.y}
 			s.packed = true
 			packed += 1
-			for x := best_x; x < best_x + size_x; x += 1 {
-				skyline[x] = best_y + size_y
-			}
 		}
 	}
 	return
