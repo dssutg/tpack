@@ -1,3 +1,137 @@
 # tpack
 
-tpack is a texture packing CLI tool.
+A texture packing CLI written in [Odin](https://odin-lang.org). Packs `.png` sprites from a directory into a single texture atlas image and generates a sprite map describing where each sprite landed (C, JSON, SSM, or binary SPR formats).
+
+## Features
+
+- Recursively discovers PNG sprites in a directory (deterministic, sorted order).
+- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from `dssodinlib/rect_pack`.
+- Configurable per-sprite padding to prevent edge bleeding.
+- Outputs the atlas as a PNG plus a sprite map in one of several formats (C, JSON, SSM, binary SPR).
+- No-overwrite guard and progress reporting to stderr.
+
+## Requirements
+
+- [Odin](https://odin-lang.org/docs/install/) (a recent nightly; tested with `dev-2026-08`).
+- SDL2 development libraries (used via `vendor:sdl2` and `vendor:sdl2/image` for image loading/encoding).
+- The sibling package `../dssodinlib/rect_pack` (a skyline rect packer). This is a relative-path import, so it must exist at `../dssodinlib/rect_pack` relative to this repository, otherwise the build fails.
+
+## Build and Run
+
+```
+odin build .            # produces ./tpack
+odin run . -- <args>    # build and run in one step
+```
+
+The binary can also be built and installed with a Makefile (see below).
+
+## Usage
+
+```
+tpack [options] <sprites_dir> <atlas_path> <sprite_map_path>
+```
+
+Arguments:
+
+| Argument | Description |
+|----------|-------------|
+| `sprites_dir`      | Directory to scan recursively for `.png` sprites |
+| `atlas_path`       | Output atlas image path (PNG) |
+| `sprite_map_path`  | Output sprite map path |
+
+Options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--width <n>`           | `2048`  | Atlas width (8–4096; ignored with `--auto-size`) |
+| `--height <n>`          | `2048`  | Atlas height (8–4096; ignored with `--auto-size`) |
+| `--auto-size`           | `on`    | Pick the smallest square power-of-two atlas that fits all sprites (default) |
+| `--no-auto-size`        |         | Use the explicit/default `--width`/`--height` instead of auto-sizing |
+| `--spr-root <dir>`      |         | Project root: `spr` hash paths relative to this directory |
+| `--sprite-padding <n>`  | `0`     | Padding pixels around each sprite (0–128) |
+| `--heuristic <h>`       | `bl`    | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter) |
+| `--no-sort`             |         | Disable largest-first pre-sorting |
+| `--map-format <f>`      | `auto`  | Sprite map format: `auto`, `c`, `structured-c`, `json`, `ssm`, `spr` |
+| `--map-enum-prefix <p>` | `SPRITE_` | Enum prefix for `structured-c` output |
+| `--map-array-name <n>`  | `sprites` | Array name for `c` / `structured-c` output |
+| `--map-array-type <t>`  | `SDL_Rect` | Element type for `structured-c` output |
+| `--no-overwrite`        |         | Refuse to overwrite existing output files |
+| `--incremental`         |         | Skip the rebuild when the atlas and sprite map are newer than every source sprite |
+| `-h`, `-help`           |         | Show help |
+
+The sprite map format is inferred from the output file extension when `--map-format auto` (the default): `.json`, `.ssm`, `.c`, and `.spr` are recognized; `structured-c` requires the explicit flag.
+
+Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--height` are explicitly provided, which disables it), the tool ignores `--width`/`--height` and probes increasing square power-of-two sizes (64 → 128 → … up to 4096) until the skyline packer fits every sprite, then uses the smallest size that works. This is handy when the sprite set varies or you always want the tightest GPU-friendly texture. A sprite wider or taller than 4096 (or a set that outgrows 4096×4096) can never fit and is reported as an `Atlas_Too_Small_Error`.
+
+### Sprite map formats
+
+- **JSON**: an object keyed by sprite image path with `x`, `y`, `w`, `h` rectangles.
+- **SSM**: tab-separated records, one per sprite: `S\t<path>\t<x>\t<y>\t<w>\t<h>`.
+- **C**: a plain C array of `{ filename, x, y, w, h }` entries.
+- **structured-c**: a C header with a generated `enum` of sprite identifiers plus an array indexed by those enum values, guarded by `<prefix>_IMPLEMENTATION` so it can be included for declarations and instantiated in one translation unit.
+- **SPR**: a compact binary atlas sprite map (see `docs/spr-format-spec.md`). Each sprite is identified by the FNV-1a 32-bit hash of its source path, so lookups are `O(log n)` binary searches over the hash array. By default the FULL discovered path is hashed (e.g. `assets/units/christina/0001.png`); pass `--spr-root <dir>` to hash paths relative to a project root instead (e.g. with `--spr-root assets`, `assets/units/christina/0001.png` hashes as `units/christina/0001.png`). The atlas scale mode for SPR is emitted as `Linear`.
+
+### Incremental builds
+
+With `--incremental`, `tpack` first checks whether a rebuild is actually needed. The atlas PNG and the sprite map file are both required to exist **and** be newer than every source sprite under `sprites_dir` (source directory mtimes are counted too, so adding, removing, or renaming a sprite triggers a rebuild). If the outputs are already current, `tpack` prints that they are up to date and exits `0` without re-reading any sprite or rewriting any file.
+
+Build *configuration* (atlas size, padding, heuristic, map format, ...) is assumed not to change between runs; staleness is detected purely from filesystem modification times of the source files, so only source edits force a repack. Without `--incremental`, `tpack` always does a full rebuild (the default, unchanged behavior).
+
+### Example
+
+```
+tpack --width 2048 --height 2048 --map-format json \
+      assets/sprites assets/out/atlas.png assets/out/sprites.json
+```
+
+## Exit codes
+
+- `0` — success (including `-h`/`-help`)
+- `1` — packing or I/O failure (e.g. atlas too small, output exists with `--no-overwrite`), or an image failed to load
+- `2` — invalid command-line arguments
+
+Progress and diagnostics are written to stderr so stdout remains clean for scripting.
+
+## Build System
+
+A Makefile provides common targets:
+
+```
+make build     # compile ./tpack
+make vet       # build with -vet (unused/shadowing/type checks)
+make harness   # run the integration harness (pack test/sprites)
+make clean     # remove ./tpack
+make install   # install to $(PREFIX)/bin (default /usr/local)
+make help      # list targets
+```
+
+Override the toolchain with `make ODIN=/path/to/odin`.
+
+## Testing
+
+There is no Odin unit-test suite (`odin test .` reports "No tests to run"). Integration coverage is provided by `test/pack/pack.odin`, a harness that spawns the tool against the fixtures in `test/sprites/`:
+
+```
+make harness       # or: odin run test/pack
+```
+
+This regenerates `test/textures/sprites.png` and `test/textures/sprites.c`. Reference outputs (e.g. `test/textures/parse_json.c`) illustrate how the JSON/SSM maps are consumed.
+
+## Repository Layout
+
+All source is a single Odin package (`main`) split across files by concern:
+
+| File | Responsibility |
+|------|----------------|
+| `main.odin`      | CLI parsing + entry point |
+| `config.odin`    | constants, enums, option structs |
+| `atlas.odin`     | packing orchestration + atlas PNG output |
+| `sprites.odin`   | sprite discovery + decoding |
+| `packer.odin`    | skyline rect packing + pixel compositing |
+| `sprite_map.odin`| sprite map output writers (C/JSON/SSM/SPR) |
+| `incremental.odin`| mtime-based output staleness check for `--incremental` |
+| `util.odin`      | shared helpers (escaping, identifier checks) |
+
+## License
+
+[MIT](LICENSE)

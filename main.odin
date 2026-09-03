@@ -1,80 +1,167 @@
+// main.odin - tpack CLI entry point.
+//
+// Parses command-line arguments, wires them into the packing pipeline
+// (see atlas.odin), and reports results / errors on stderr.
+//
+// The pack cycle is backed by a single virtual arena created here and released
+// with virtual.arena_free_all once packing finishes. The arena allocator is
+// threaded through every allocating function as an explicit `allocator`
+// parameter; SDL surfaces (not arena-managed) are released via
+// free_sprite_surfaces.
+//
+// Exit codes:
+//   0 - success (or -h/-help)
+//   1 - packing or I/O failure
+//   2 - invalid command-line arguments
+
 #+feature dynamic-literals
 package main
 
-import "core:c"
 import "core:flags"
 import "core:fmt"
+import "core:mem/virtual"
 import "core:os"
-import "core:path/filepath"
-import "core:slice"
 import "core:strings"
-import "core:unicode"
 
 import rp "../dssodinlib/rect_pack"
-import sdl "vendor:sdl2"
-import img "vendor:sdl2/image"
 
-Error :: union {
-	string,
-	Atlas_Too_Small_Error,
-}
-
+// Options mirrors the CLI: named flags and three positional arguments.
+// Field tags drive the core:flags parser (UNIX style: --name value).
 Options :: struct {
-	dir:            string `args:"pos=0,required"`,
-	atlas_path:     string `args:"pos=1,required"`,
-	sprite_map:     string `args:"pos=2,required"`,
-	atlas_width:    int    `args:"name=width"`,
-	atlas_height:   int    `args:"name=height"`,
-	sprite_padding: int    `args:"name=sprite-padding"`,
-	heuristic:      string `args:"name=heuristic"`,
-	no_sort:        bool   `args:"name=no-sort"`,
-	map_format:     string `args:"name=map-format"`,
-	map_enum_prefix: string `args:"name=map-enum-prefix"`,
-	map_array_name:  string `args:"name=map-array-name"`,
-	map_array_type:  string `args:"name=map-array-type"`,
+	dir:             string `args:"pos=0,required"`,       // sprites directory
+	atlas_path:      string `args:"pos=1,required"`,       // output atlas PNG
+	sprite_map:      string `args:"pos=2,required"`,       // output sprite map
+	atlas_width:     int    `args:"name=width"`,           // atlas width (0 = unset; overridden by auto-size)
+	atlas_height:    int    `args:"name=height"`,          // atlas height (0 = unset; overridden by auto-size)
+	auto_size:       bool   `args:"name=auto-size"`,       // fit the smallest power-of-two atlas (default)
+	no_auto_size:    bool   `args:"name=no-auto-size"`,    // use explicit/default dimensions instead
+	spr_root:        string `args:"name=spr-root"`,        // project root for spr path hashing
+	sprite_padding:  int    `args:"name=sprite-padding"`,  // gap between sprites
+	heuristic:       string `args:"name=heuristic"`,       // bl (bottom-left) or bf (best-fit)
+	scale_mode:      string `args:"name=scale-mode"`,      // nearest, linear, or pixel-art
+	no_sort:         bool   `args:"name=no-sort"`,         // disable size pre-sorting
+	map_format:      string `args:"name=map-format"`,      // auto/c/structured-c/json/ssm/spr
+	map_enum_prefix: string `args:"name=map-enum-prefix"`, // enum prefix (structured-c)
+	map_array_name:  string `args:"name=map-array-name"`,  // array name (c/structured-c)
+	map_array_type:  string `args:"name=map-array-type"`,  // array element type (structured-c)
+	no_overwrite:    bool   `args:"name=no-overwrite"`,    // refuse to overwrite outputs
+	incremental:     bool   `args:"name=incremental"`,     // skip rebuild when outputs are current
 }
 
+// main parses arguments, validates them, runs the packing pipeline, and
+// translates any error into a stderr message and non-zero exit code.
 main :: proc() {
+	// Seed defaults; flags.parse overwrites the ones the user supplied.
+	// width/height default to 0, meaning "not specified", so that auto-size
+	// (the default) is used unless the user supplies explicit dimensions.
 	opt := Options {
-		atlas_width      = Default_Atlas_Width,
-		atlas_height     = Default_Atlas_Height,
-		sprite_padding   = Default_Sprite_Padding,
-		heuristic        = Default_Heuristic,
-		map_format       = Default_Map_Format,
-		map_enum_prefix  = Default_Map_Enum_Prefix,
-		map_array_name   = Default_Map_Array_Name,
-		map_array_type   = Default_Map_Array_Type,
+		auto_size       = true,
+		sprite_padding  = Default_Sprite_Padding,
+		heuristic       = Default_Heuristic,
+		scale_mode      = Default_Scale_Mode,
+		map_format      = Default_Map_Format,
+		map_enum_prefix = Default_Map_Enum_Prefix,
+		map_array_name  = Default_Map_Array_Name,
+		map_array_type  = Default_Map_Array_Type,
 	}
 
 	args := os.args[1:]
 	parse_err := flags.parse(&opt, args, .Unix)
 	if parse_err != nil {
-		fmt.eprintfln("%s: %v", os.args[0], parse_err)
+		// Each error type is turned into a plain, user-facing message. In
+		// particular, raw enum values (flag reasons, os error codes) are never
+		// formatted directly, so the user never sees internal constants.
+		switch e in parse_err {
+		case flags.Help_Request:
+			usage(os.args[0])
+			os.exit(0)
+		case flags.Parse_Error:
+			fmt.eprintfln("%s: %s", os.args[0], e.message)
+		case flags.Validation_Error:
+			fmt.eprintfln("%s: %s", os.args[0], e.message)
+		case flags.Open_File_Error:
+			fmt.eprintfln("%s: cannot open %s: %s", os.args[0], e.filename, os.error_string(e.errno))
+		}
 		os.exit(2)
 	}
 
-	map_format: Map_Format
-	ok: bool
-	map_format, ok = map_format_from_string(opt.map_format)
-	if !ok {
-		valid, _ := strings.join(valid_map_format_strings(), ", ")
+	// Validate values that must be valid C identifiers
+	if !is_valid_c_identifier(opt.map_array_name) {
+		fmt.eprintfln(
+			"%s: --map-array-name must be a valid C identifier, got %q",
+			os.args[0],
+			opt.map_array_name,
+		)
+		os.exit(2)
+	}
+	if !is_valid_c_identifier(opt.map_enum_prefix) {
+		fmt.eprintfln(
+			"%s: --map-enum-prefix must be a valid C identifier, got %q",
+			os.args[0],
+			opt.map_enum_prefix,
+		)
+		os.exit(2)
+	}
+
+	// Resolve the sprite map format string to an enum
+	map_format, map_format_ok := map_format_from_string(opt.map_format)
+	if !map_format_ok {
+		valid := strings.join(valid_map_format_strings(), ", ")
 		fmt.eprintfln("%s: invalid map format. Valid formats: %s", os.args[0], valid)
 		os.exit(2)
 	}
 
-	heuristic: rp.Heuristic
-	heuristic, ok = heuristic_from_string(opt.heuristic)
-	if !ok {
-		fmt.eprintfln("%s: invalid heuristic. Valid: bl, bf", os.args[0])
+	// Resolve the heuristic name to a rect_pack enum
+	heuristic, heuristic_ok := heuristic_from_string(opt.heuristic)
+	if !heuristic_ok {
+		valid := strings.join(valid_heuristic_strings(), ", ")
+		fmt.eprintfln("%s: invalid heuristic. Valid: %s", os.args[0], valid)
 		os.exit(2)
 	}
+
+	// Resolve the scale-mode name to a Spr_Scale_Mode
+	scale_mode, scale_mode_ok := scale_mode_from_string(opt.scale_mode)
+	if !scale_mode_ok {
+		valid := strings.join(valid_scale_mode_strings(), ", ")
+		fmt.eprintfln("%s: invalid scale-mode. Valid: %s", os.args[0], valid)
+		os.exit(2)
+	}
+
+	// Run the packer
+	//
+	// A virtual arena backs every allocation the pack cycle makes (the sprite
+	// slice, image paths, request lists, and error strings). It is released in
+	// one shot on the success path; on the error path the
+	// process exits and the OS reclaims everything. SDL surfaces are not
+	// arena-managed and are released explicitly (free_sprite_surfaces).
+	arena: virtual.Arena
+	if aerr := virtual.arena_init_growing(&arena); aerr != nil {
+		fmt.eprintfln("%s: failed to allocate backing arena: %v", os.args[0], aerr)
+		os.exit(1)
+	}
+	defer virtual.arena_destroy(&arena)
+	allocator := virtual.arena_allocator(&arena)
+
+	// Resolve sizing
+	//
+	// Auto-size is the default. Supplying either --width or --height (or the
+	// explicit --no-auto-size flag) switches to explicit dimensions; any
+	// dimension left at 0 falls back to its default.
+	explicit_w := opt.atlas_width != 0
+	explicit_h := opt.atlas_height != 0
+	use_auto_size := opt.auto_size && !opt.no_auto_size && !(explicit_w || explicit_h)
+	atlas_width := opt.atlas_width == 0 ? Default_Atlas_Width : opt.atlas_width
+	atlas_height := opt.atlas_height == 0 ? Default_Atlas_Height : opt.atlas_height
 
 	err := pack_sprites_to_atlas({
 		dir             = opt.dir,
 		atlas_path      = opt.atlas_path,
 		sprite_map_path = opt.sprite_map,
-		atlas_width     = opt.atlas_width,
-		atlas_height    = opt.atlas_height,
+		atlas_width     = atlas_width,
+		atlas_height    = atlas_height,
+		auto_size       = use_auto_size,
+		spr_root        = opt.spr_root,
+		spr_scale_mode  = scale_mode,
 		sprite_padding  = opt.sprite_padding,
 		heuristic       = heuristic,
 		sort            = !opt.no_sort,
@@ -82,431 +169,63 @@ main :: proc() {
 		map_enum_prefix = opt.map_enum_prefix,
 		map_array_name  = opt.map_array_name,
 		map_array_type  = opt.map_array_type,
-	})
+		no_overwrite    = opt.no_overwrite,
+		incremental     = opt.incremental,
+	}, allocator)
 	if err != nil {
-		if too_small, ok := err.(Atlas_Too_Small_Error); ok {
+		// Translate the typed error union into a human-readable message. The
+		// switch is exhaustive over Error's members, so every variant is turned
+		// into text here rather than ever reaching the user as a raw value.
+		switch err in err {
+		case Atlas_Too_Small_Error:
 			fmt.eprintfln("%s: failed to pack all sprites", os.args[0])
-			for s in too_small.sprites {
+			for s in err.sprites {
 				if !s.packed {
 					fmt.eprintfln("  FAILED %s [%dx%d]", s.image_path, s.surface.w, s.surface.h)
 				}
 			}
-		} else {
-			#partial switch e in err {
-			case string:
-				fmt.eprintfln("%s: %s", os.args[0], e)
-			}
+			// Release the SDL surfaces the pipeline handed back on error (the
+			// Odin-side slice/strings are arena-owned and reclaimed on exit).
+			free_sprite_surfaces(err.sprites)
+		case Output_Exists_Error:
+			fmt.eprintfln(
+				"%s: output file %s already exists (use without --no-overwrite to replace)",
+				os.args[0],
+				err.path,
+			)
+		case string:
+			fmt.eprintfln("%s: %s", os.args[0], err)
 		}
-
 		os.exit(1)
 	}
 }
 
-ABGR8888 :: (1 << 28) | (6 << 24) | (7 << 20) | (6 << 16) | (32 << 8) | 4
-
-Map_Format :: enum {
-	Auto,
-	C,
-	Structured_C,
-	JSON,
-	SSM,
-}
-
-string_to_map_format := map[string]Map_Format {
-	"auto"         = .Auto,
-	"c"            = .C,
-	"structured-c" = .Structured_C,
-	"json"         = .JSON,
-	"ssm"          = .SSM,
-}
-
-ext_to_map_format := map[string]Map_Format {
-	".json" = .JSON,
-	".ssm"  = .SSM,
-	".c"    = .C,
-}
-
-valid_map_format_strings :: proc() -> []string {
-	formats := make([dynamic]string, 0, len(string_to_map_format))
-	for format in string_to_map_format {
-		append(&formats, format)
-	}
-	slice.sort(formats[:])
-	return formats[:]
-}
-
-map_format_from_string :: proc(s: string) -> (format: Map_Format, ok: bool) {
-	format, ok = string_to_map_format[s]
-	return
-}
-
-heuristic_from_string :: proc(s: string) -> (h: rp.Heuristic, ok: bool) {
-	switch strings.to_lower(s) {
-	case "bl":  return .Skyline_default, true
-	case "bf":  return .Skyline_BF_sortHeight, true
-	}
-	return .Skyline_default, false
-}
-
-Min_Atlas_Width          := 8
-Default_Atlas_Width      := 2048
-Max_Atlas_Width          := 4096
-Min_Atlas_Height         := 8
-Default_Atlas_Height     := 2048
-Max_Atlas_Height         := 4096
-Min_Sprite_Padding       := 0
-Default_Sprite_Padding   := 0
-Max_Sprite_Padding       := 128
-Default_Map_Format       := "auto"
-Default_Heuristic        := "bl"
-Default_Map_Enum_Prefix  := "SPRITE_"
-Default_Map_Array_Name   := "sprites"
-Default_Map_Array_Type   := "SDL_Rect"
-
-Pack_Options :: struct {
-	dir:             string,
-	atlas_path:      string,
-	sprite_map_path: string,
-	atlas_width:     int,
-	atlas_height:    int,
-	sprite_padding:  int,
-	heuristic:       rp.Heuristic,
-	sort:            bool,
-	map_format:      Map_Format,
-	map_enum_prefix: string,
-	map_array_name:  string,
-	map_array_type:  string,
-}
-
-Sprite :: struct {
-	offset:     [2]int,
-	image_path: string,
-	surface:    ^sdl.Surface,
-	packed:     bool,
-}
-
-Atlas_Too_Small_Error :: struct {
-	sprites: []Sprite,
-}
-
-pack_sprites_to_atlas :: proc(opt: Pack_Options) -> (err: Error) {
-	if opt.atlas_width < Min_Atlas_Width || opt.atlas_width > Max_Atlas_Width {
-		return fmt.aprintf("invalid atlas width (min: %d, max: %d)", Min_Atlas_Width, Max_Atlas_Width)
-	}
-	if opt.atlas_height < Min_Atlas_Height || opt.atlas_height > Max_Atlas_Height {
-		return fmt.aprintf("invalid atlas height (min: %d, max: %d)", Min_Atlas_Height, Max_Atlas_Height)
-	}
-	if opt.sprite_padding < Min_Sprite_Padding || opt.sprite_padding > Max_Sprite_Padding {
-		return fmt.aprintf("invalid sprite padding (min: %d, max: %d)", Min_Sprite_Padding, Max_Sprite_Padding)
-	}
-
-	sprites, ferr := find_and_read_sprites(opt.dir, ".png")
-	if ferr != nil {
-		return ferr
-	}
-
-	packed := pack_sprites_skyline(sprites, opt.atlas_width, opt.atlas_height, opt.sprite_padding, opt.heuristic, opt.sort)
-	if packed != len(sprites) {
-		return Atlas_Too_Small_Error { sprites = sprites }
-	}
-	defer delete_sprites(sprites)
-
-	atlas := sdl.CreateRGBSurfaceWithFormat(0, c.int(opt.atlas_width), c.int(opt.atlas_height), 32, ABGR8888)
-	if atlas == nil {
-		return fmt.aprintf("failed to create atlas surface: %s", sdl.GetErrorString())
-	}
-	defer sdl.FreeSurface(atlas)
-
-	for &s in sprites {
-		if s.packed {
-			copy_sprite_to_atlas(s.surface, atlas, s.offset.x, s.offset.y)
-		}
-	}
-
-	err = save_texture_atlas(opt.atlas_path, atlas)
-	if err != nil {
-		return
-	}
-
-	err = save_atlas_sprite_map(
-		opt.map_format,
-		opt.sprite_map_path,
-		opt.map_enum_prefix,
-		opt.map_array_name,
-		opt.map_array_type,
-		sprites,
-	)
-	return
-}
-
-delete_sprites :: proc(sprites: []Sprite) {
-	for s in sprites {
-		sdl.FreeSurface(s.surface)
-	}
-	delete(sprites)
-}
-
-find_and_read_sprites :: proc(path: string, file_ext: string) -> (sprites: []Sprite, err: Error) {
-	filenames, ferr := find_image_files(path, file_ext)
-	if ferr != nil {
-		return nil, fmt.aprintf("cannot read sprite image files: %v", ferr)
-	}
-	defer delete(filenames)
-
-	dyn := make([dynamic]Sprite, 0, len(filenames))
-
-	for path in filenames {
-		sprite, rerr := read_sprite_from_file(path)
-		if rerr != nil {
-			delete(dyn)
-			return nil, fmt.aprintf("cannot read sprite image file %s: %v", path, rerr)
-		}
-		append(&dyn, sprite)
-	}
-
-	return dyn[:], nil
-}
-
-find_image_files :: proc(dir_path, extension: string) -> (paths: []string, err: os.Error) {
-	dyn := make([dynamic]string, 0, 100)
-	if werr := walk_image_dir(dir_path, "", extension, &dyn); werr != nil {
-		delete(dyn)
-		return nil, werr
-	}
-	return dyn[:], nil
-}
-
-walk_image_dir :: proc(root, rel, extension: string, out: ^[dynamic]string) -> (err: os.Error) {
-	open_path := root
-	if len(rel) > 0 {
-		open_path = strings.concatenate({root, "/", rel}, context.temp_allocator)
-	}
-
-	h, oerr := os.open(open_path)
-	if oerr != nil {
-		return oerr
-	}
-	defer os.close(h)
-
-	entries, rerr := os.read_dir(h, 0, context.temp_allocator)
-	if rerr != nil {
-		return rerr
-	}
-
-	sort_to := entries[:]
-	slice.sort_by(sort_to, less_file_info)
-
-	for e in sort_to {
-		child_rel := strings.concatenate(
-			{rel, "/", e.name} if len(rel) > 0 else {e.name},
-			context.temp_allocator,
-		)
-
-		if e.type == .Directory {
-			if derr := walk_image_dir(root, child_rel, extension, out); derr != nil {
-				return derr
-			}
-		} else {
-			if strings.has_suffix(strings.to_lower(e.name, context.temp_allocator), extension) {
-				disp := strings.concatenate({root, "/", child_rel}, context.temp_allocator)
-				append(out, strings.clone(disp))
-			}
-		}
-	}
-	return
-}
-
-less_file_info :: proc(a, b: os.File_Info) -> bool {
-	return a.name < b.name
-}
-
-read_sprite_from_file :: proc(path: string) -> (sprite: Sprite, err: Error) {
-	raw := img.Load(strings.clone_to_cstring(path, context.temp_allocator))
-	if raw == nil {
-		return {}, fmt.aprintf("cannot load image %s: %s", path, sdl.GetErrorString())
-	}
-	defer sdl.FreeSurface(raw)
-
-	surface := sdl.ConvertSurfaceFormat(raw, ABGR8888, 0)
-	if surface == nil {
-		return {}, fmt.aprintf("cannot convert image %s: %s", path, sdl.GetErrorString())
-	}
-	return Sprite {
-		image_path = strings.clone(path),
-		surface    = surface,
-	}, nil
-}
-
-copy_sprite_to_atlas :: proc(src, dst: ^sdl.Surface, ox, oy: int) {
-	src_pixels := ([^]u8)(src.pixels)
-	dst_pixels := ([^]u8)(dst.pixels)
-	src_pitch := int(src.pitch)
-	dst_pitch := int(dst.pitch)
-	w := int(src.w)
-	h := int(src.h)
-
-	for y in 0 ..< h {
-		for x in 0 ..< w {
-			si := y * src_pitch + x * 4
-			di := (oy + y) * dst_pitch + (ox + x) * 4
-			a := src_pixels[si + 3]
-			if a == 0 {
-				dst_pixels[di + 0] = 0
-				dst_pixels[di + 1] = 0
-				dst_pixels[di + 2] = 0
-				dst_pixels[di + 3] = 0
-			} else {
-				dst_pixels[di + 0] = src_pixels[si + 0]
-				dst_pixels[di + 1] = src_pixels[si + 1]
-				dst_pixels[di + 2] = src_pixels[si + 2]
-				dst_pixels[di + 3] = a
-			}
-		}
-	}
-}
-
-pack_sprites_skyline :: proc(sprites: []Sprite, atlas_width, atlas_height, padding: int, heuristic: rp.Heuristic, should_sort: bool) -> (packed: int) {
-	packer: rp.Packer
-	rp.init(&packer, atlas_width, atlas_height, len(sprites), heuristic)
-	defer rp.destroy(&packer)
-
-	requests := make([]rp.Request, len(sprites))
-	defer delete(requests)
-	for s, i in sprites {
-		requests[i] = rp.Request {
-			w = int(s.surface.w) + padding * 2,
-			h = int(s.surface.h) + padding * 2,
-		}
-	}
-
-	results, _ := rp.pack(&packer, requests, padding = 0, should_sort = should_sort)
-	defer delete(results)
-
-	for r, i in results {
-		s := &sprites[i]
-		if r.was_packed {
-			s.offset = [2]int{r.x, r.y}
-			s.packed = true
-			packed += 1
-		}
-	}
-	return
-}
-
-save_texture_atlas :: proc(atlas_path: string, atlas: ^sdl.Surface) -> (err: Error) {
-	if dir := filepath.dir(atlas_path); dir != "." && len(dir) > 0 {
-		os.make_directory_all(dir)
-	}
-
-	cpath := strings.clone_to_cstring(atlas_path, context.temp_allocator)
-	if img.SavePNG(atlas, cpath) != 0 {
-		return fmt.aprintf("error writing texture atlas file: %s", sdl.GetErrorString())
-	}
-	return
-}
-
-image_path_to_enum_name :: proc(name: string) -> string {
-	base := filepath.base(name)
-	name_without_ext := base[:len(base) - len(filepath.ext(base))]
-
-	clean, _ := strings.replace_all(name_without_ext, "-", " ")
-	clean, _ = strings.replace_all(clean, "_", " ")
-	clean, _ = strings.replace_all(clean, ".", " ")
-	words := strings.fields(clean, context.temp_allocator)
-
-	builder := strings.builder_make(context.temp_allocator)
-	for word in words {
-		if len(word) > 0 {
-			strings.write_rune(&builder, unicode.to_upper(rune(word[0])))
-			for i := 1; i < len(word); i += 1 {
-				strings.write_rune(&builder, unicode.to_lower(rune(word[i])))
-			}
-		}
-	}
-	return strings.to_string(builder)
-}
-
-save_atlas_sprite_map :: proc(
-	format: Map_Format,
-	sprite_map_path: string,
-	map_enum_prefix: string,
-	map_array_name: string,
-	map_array_type: string,
-	sprites: []Sprite,
-) -> (err: Error) {
-	if dir := filepath.dir(sprite_map_path); dir != "." && len(dir) > 0 {
-		os.make_directory_all(dir)
-	}
-
-	resolved_format := format
-	if resolved_format == .Auto {
-		ext := strings.to_lower(filepath.ext(sprite_map_path))
-		if f, found := ext_to_map_format[ext]; found {
-			resolved_format = f
-		}
-	}
-
-	handle, oerr := os.open(sprite_map_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, os.Permissions{.Write_User, .Read_User, .Read_Group, .Read_Other})
-	if oerr != nil {
-		return fmt.aprintf("error creating sprite map file %s: %v", sprite_map_path, oerr)
-	}
-	defer os.close(handle)
-
-	switch resolved_format {
-	case .JSON:
-		os.write_string(handle, "{\n")
-		for i in 0 ..< len(sprites) {
-			s := &sprites[i]
-			fmt.fprintf(handle, "  %q: {{ \"x\": %d, \"y\": %d, \"w\": %d, \"h\": %d }}",
-				s.image_path, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
-			if i != len(sprites) - 1 {
-				os.write_string(handle, ",")
-			}
-			os.write_string(handle, "\n")
-		}
-		os.write_string(handle, "}\n")
-
-	case .SSM:
-		for s in sprites {
-			fmt.fprintf(handle, "S\t%q\t%d\t%d\t%d\t%d\n",
-				s.image_path, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
-		}
-
-	case .C:
-		os.write_string(handle, "/* DO NOT EDIT; generated with tpack */\n\n")
-		os.write_string(handle, "const struct {\n")
-		os.write_string(handle, "  const char *filename;\n")
-		os.write_string(handle, "  int x, y, w, h;\n")
-		fmt.fprintf(handle, "}} %s[] = {{\n", map_array_name)
-		for s in sprites {
-			fmt.fprintf(handle, "  {{ .filename = %q, .x = %d, .y = %d, .w = %d, .h = %d }},\n",
-				s.image_path, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
-		}
-		os.write_string(handle, "};\n")
-
-	case .Structured_C:
-		os.write_string(handle, "/* DO NOT EDIT; generated with tpack */\n\n")
-		os.write_string(handle, "enum {\n")
-		for s in sprites {
-			fmt.fprintf(handle, "  %s%s,\n", map_enum_prefix, image_path_to_enum_name(s.image_path))
-		}
-		os.write_string(handle, "};\n\n")
-		fmt.fprintf(handle, "extern const %s %s[];\n\n", map_array_type, map_array_name)
-		fmt.fprintf(handle, "#ifdef %s_IMPLEMENTATION\n", map_enum_prefix)
-		fmt.fprintf(handle, "const %s %s[] = {{\n", map_array_type, map_array_name)
-		for s in sprites {
-			fmt.fprintf(handle, " [%s%s] = {{ .x = %d, .y = %d, .w = %d, .h = %d }},\n",
-				map_enum_prefix, image_path_to_enum_name(s.image_path),
-				s.offset.x, s.offset.y, s.surface.w, s.surface.h)
-		}
-		os.write_string(handle, "};\n")
-		fmt.fprintf(handle, "#endif /* %s_IMPLEMENTATION */\n", map_enum_prefix)
-
-	case .Auto:
-		return fmt.aprintf("cannot determine sprite map format from extension of %s", sprite_map_path)
-
-	case:
-		return fmt.aprintf("unknown format of sprite map %s", sprite_map_path)
-	}
-	return
+// usage prints the command-line help to stderr. Called for -h/-help and
+// mirrored in the error output for bad usage.
+usage :: proc(program: string) {
+	fmt.eprintf("Usage: %s [options] <sprites_dir> <atlas_path> <sprite_map_path>\n\n", program)
+	fmt.eprintf("Pack PNG sprites into a texture atlas and generate a sprite map.\n\n")
+	fmt.eprintf("Arguments:\n")
+	fmt.eprintf("  sprites_dir      Directory of PNG sprites (recursive)\n")
+	fmt.eprintf("  atlas_path       Output atlas image path (PNG)\n")
+	fmt.eprintf("  sprite_map_path  Output sprite map path\n\n")
+	fmt.eprintf("Options:\n")
+	fmt.eprintf("  --width <n>            Atlas width (default: %d, max: %d)\n", Default_Atlas_Width, Max_Atlas_Width)
+	fmt.eprintf("  --height <n>           Atlas height (default: %d, max: %d)\n", Default_Atlas_Height, Max_Atlas_Height)
+	fmt.eprintf("  --auto-size            Fit the smallest square power-of-two atlas for all sprites\n")
+	fmt.eprintf("                           (default; used unless --width/--height are given)\n")
+	fmt.eprintf("  --no-auto-size         Use explicit/default dimensions instead of auto-size\n")
+	fmt.eprintf("  --spr-root <dir>       Project root: spr hashes paths relative to this\n")
+	fmt.eprintf("  --sprite-padding <n>   Padding between sprites (default: %d, max: %d)\n", Default_Sprite_Padding, Max_Sprite_Padding)
+	fmt.eprintf("  --heuristic <h>        Packing heuristic: bl (bottom-left) or bf (best-fit) (default: %s)\n", Default_Heuristic)
+	fmt.eprintf("  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: %s)\n", Default_Scale_Mode)
+	fmt.eprintf("  --no-sort              Don't sort sprites before packing\n")
+	fmt.eprintf("  --map-format <f>       Sprite map format: auto, c, structured-c, json, ssm, spr (default: %s)\n", Default_Map_Format)
+	fmt.eprintf("  --map-enum-prefix <p>  Enum prefix for structured-c (default: %s)\n", Default_Map_Enum_Prefix)
+	fmt.eprintf("  --map-array-name <n>   Array name for C output (default: %s)\n", Default_Map_Array_Name)
+	fmt.eprintf("  --map-array-type <t>   Array type for structured-c (default: %s)\n", Default_Map_Array_Type)
+	fmt.eprintf("  --no-overwrite         Don't overwrite existing output files\n")
+	fmt.eprintf("  --incremental          Skip the rebuild if the atlas and sprite map\n")
+	fmt.eprintf("                           are newer than every source sprite\n")
+	fmt.eprintf("  -h, -help              Show this help message\n")
 }
