@@ -5,7 +5,11 @@
 ODIN ?= odin
 
 BIN      := tpack
-SRC      := main.odin config.odin atlas.odin sprites.odin packer.odin sprite_map.odin util.odin
+# All package files; incremental.odin guard so edits trigger a rebuild too.
+SRC      := main.odin config.odin atlas.odin sprites.odin packer.odin sprite_map.odin util.odin incremental.odin
+# External deps used by the packer: rect_pack plus the whole utils package
+# (config/sprite_map/sprites import it). Wildcard catches any change in it.
+UTILS_SRC := $(wildcard ../dssodinlib/utils/*.odin)
 
 .PHONY: all build vet test harness clean install
 
@@ -14,7 +18,7 @@ all: build
 ## build - Compile the tpack binary (default -o:minimal).
 build: $(BIN)
 
-$(BIN): $(SRC) ../dssodinlib/rect_pack/rect_pack.odin
+$(BIN): $(SRC) ../dssodinlib/rect_pack/rect_pack.odin $(UTILS_SRC)
 	$(ODIN) build .
 
 ## vet - Compile with -vet (unused/shadowing/type checks).

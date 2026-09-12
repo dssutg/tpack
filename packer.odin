@@ -31,7 +31,9 @@ pack_sprites_skyline :: proc(
 	heuristic: rp.Heuristic,
 	should_sort: bool,
 	allocator: mem.Allocator,
-) -> (packed: int) {
+) -> (
+	packed: int,
+) {
 	packer: rp.Packer
 	rp.init(&packer, atlas_width, atlas_height, len(sprites), heuristic)
 	defer rp.destroy(&packer)
@@ -124,16 +126,29 @@ copy_sprite_to_atlas :: proc(src, dst: ^sdl.Surface, ox, oy: int) {
 
 // create_atlas_surface allocates a blank SDL surface sized to the atlas in
 // the tool's canonical ABGR8888 format. Returns nil on failure.
-create_atlas_surface :: proc(width, height: int) -> (atlas: ^sdl.Surface, err: Error) {
+//
+// allocator backs error strings so they live on the same arena as every
+// other pack-cycle allocation (see AGENTS.md "Arena memory model").
+create_atlas_surface :: proc(
+	width, height: int,
+	allocator: mem.Allocator,
+) -> (
+	atlas: ^sdl.Surface,
+	err: Error,
+) {
 	atlas = sdl.CreateRGBSurfaceWithFormat(
-		flags  = 0,
-		width  = c.int(width),
+		flags = 0,
+		width = c.int(width),
 		height = c.int(height),
-		depth  = 32,
+		depth = 32,
 		format = u32(sdl.PixelFormatEnum.ABGR8888),
 	)
 	if atlas == nil {
-		return nil, fmt.aprintf("failed to create atlas surface: %s", sdl.GetErrorString())
+		return nil, fmt.aprintf(
+			"failed to create atlas surface: %s",
+			sdl.GetErrorString(),
+			allocator = allocator,
+		)
 	}
 	return
 }

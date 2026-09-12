@@ -17,7 +17,7 @@ is_valid_c_identifier :: proc(s: string) -> bool {
 	if len(s) == 0 || !is_identifier_first(s[0]) {
 		return false
 	}
-  return slice.all_of_proc(transmute([]byte)s, is_identifier_rest)
+	return slice.all_of_proc(transmute([]byte)s, is_identifier_rest)
 }
 
 // is_identifier_first reports whether c can start a C identifier.
@@ -38,11 +38,16 @@ escape_json_string :: proc(s: string, allocator := context.allocator) -> string 
 	b := strings.builder_make(allocator)
 	for c in s {
 		switch c {
-		case '"':  strings.write_string(&b, "\\\"")
-		case '\\': strings.write_string(&b, "\\\\")
-		case '\n': strings.write_string(&b, "\\n")
-		case '\r': strings.write_string(&b, "\\r")
-		case '\t': strings.write_string(&b, "\\t")
+		case '"':
+			strings.write_string(&b, "\\\"")
+		case '\\':
+			strings.write_string(&b, "\\\\")
+		case '\n':
+			strings.write_string(&b, "\\n")
+		case '\r':
+			strings.write_string(&b, "\\r")
+		case '\t':
+			strings.write_string(&b, "\\t")
 		case:
 			if c < 0x20 {
 				// Control char below printable range -> \u00XX
@@ -66,11 +71,16 @@ escape_ssm_field :: proc(s: string, allocator := context.allocator) -> string {
 	b := strings.builder_make(allocator)
 	for c in s {
 		switch c {
-		case '\t': strings.write_string(&b, "\\t")
-		case '\n': strings.write_string(&b, "\\n")
-		case '\r': strings.write_string(&b, "\\r")
-		case '\\': strings.write_string(&b, "\\\\")
-		case '"':  strings.write_string(&b, "\\\"")
+		case '\t':
+			strings.write_string(&b, "\\t")
+		case '\n':
+			strings.write_string(&b, "\\n")
+		case '\r':
+			strings.write_string(&b, "\\r")
+		case '\\':
+			strings.write_string(&b, "\\\\")
+		case '"':
+			strings.write_string(&b, "\\\"")
 		case:
 			strings.write_rune(&b, c)
 		}

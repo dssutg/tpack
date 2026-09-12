@@ -24,10 +24,13 @@ import "core:time"
 // The returned error is set only when the sprite tree cannot be walked; a
 // missing output simply means "not up to date" (a rebuild is required).
 outputs_are_current :: proc(
-	sprites_dir:     string,
-	atlas_path:      string,
+	sprites_dir: string,
+	atlas_path: string,
 	sprite_map_path: string,
-) -> (current: bool, err: Error) {
+) -> (
+	current: bool,
+	err: Error,
+) {
 	atlas_mtime, aerr := os.modification_time_by_path(atlas_path)
 	if aerr != nil {
 		return false, nil
@@ -54,7 +57,10 @@ outputs_are_current :: proc(
 	map_t := time.to_unix_nanoseconds(map_mtime)
 	oldest_out := min(atlas_t, map_t)
 
-	return newest_src <= oldest_out, nil
+	// Strict "newer than": a source with the SAME timestamp as an output is
+	// stale. On coarse-granularity filesystems (the output and source written
+	// within the same tick) `<=` would wrongly mark an edit as current.
+	return newest_src < oldest_out, nil
 }
 
 // newest_sprite_mtime returns the newest modification time (in Unix

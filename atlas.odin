@@ -12,14 +12,14 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
-import img "vendor:sdl2/image"
 import sdl "vendor:sdl2"
+import img "vendor:sdl2/image"
 
 // Error is the union of all errors the packing pipeline can return.
 Error :: union {
-	string,                // general descriptive error
+	string, // general descriptive error
 	Atlas_Too_Small_Error, // some sprites did not fit in the bin
-	Output_Exists_Error,   // --no-overwrite and the output already exists
+	Output_Exists_Error, // --no-overwrite and the output already exists
 }
 
 // Output_Exists_Error reports that an output file already exists while
@@ -53,13 +53,9 @@ Atlas_Too_Small_Error :: struct {
 // this returns. SDL surfaces are manually released here (free_sprite_surfaces)
 // or by the caller in the Atlas_Too_Small_Error branch, since arenas do not
 // track C-library allocations.
-pack_sprites_to_atlas :: proc(
-	opt:       Pack_Options,
-	allocator: mem.Allocator,
-) -> (err: Error) {
+pack_sprites_to_atlas :: proc(opt: Pack_Options, allocator: mem.Allocator) -> (err: Error) {
 	// Validate sprite padding
-	if opt.sprite_padding < Min_Sprite_Padding ||
-	   opt.sprite_padding > Max_Sprite_Padding {
+	if opt.sprite_padding < Min_Sprite_Padding || opt.sprite_padding > Max_Sprite_Padding {
 		return fmt.aprintf(
 			"invalid sprite padding (min: %d, max: %d)",
 			Min_Sprite_Padding,
@@ -69,10 +65,10 @@ pack_sprites_to_atlas :: proc(
 	}
 
 	if !opt.auto_size {
-		// Validate explicit atlas dimensions
-		// (skipped when --auto-size is set: width/height are ignored there.)
-		if opt.atlas_width < Min_Atlas_Width ||
-		   opt.atlas_width > Max_Atlas_Width {
+		// Validate explicit atlas dimensions. (Only reached when auto-size is
+		// NOT engaged; giving --width/--height in main.odin switches the mode
+		// to explicit, so these are the dimensions that will actually be used.)
+		if opt.atlas_width < Min_Atlas_Width || opt.atlas_width > Max_Atlas_Width {
 			return fmt.aprintf(
 				"invalid atlas width (min: %d, max: %d)",
 				Min_Atlas_Width,
@@ -80,8 +76,7 @@ pack_sprites_to_atlas :: proc(
 				allocator = allocator,
 			)
 		}
-		if opt.atlas_height < Min_Atlas_Height ||
-		   opt.atlas_height > Max_Atlas_Height {
+		if opt.atlas_height < Min_Atlas_Height || opt.atlas_height > Max_Atlas_Height {
 			return fmt.aprintf(
 				"invalid atlas height (min: %d, max: %d)",
 				Min_Atlas_Height,
@@ -113,10 +108,10 @@ pack_sprites_to_atlas :: proc(
 	// Refuse to clobber existing outputs when requested
 	if opt.no_overwrite {
 		if os.exists(opt.atlas_path) {
-			return Output_Exists_Error { path = opt.atlas_path }
+			return Output_Exists_Error{path = opt.atlas_path}
 		}
 		if os.exists(opt.sprite_map_path) {
-			return Output_Exists_Error { path = opt.sprite_map_path }
+			return Output_Exists_Error{path = opt.sprite_map_path}
 		}
 	}
 
@@ -138,7 +133,8 @@ pack_sprites_to_atlas :: proc(
 		for {
 			packed := pack_sprites_skyline(
 				sprites,
-				size, size,
+				size,
+				size,
 				opt.sprite_padding,
 				opt.heuristic,
 				opt.sort,
@@ -149,7 +145,7 @@ pack_sprites_to_atlas :: proc(
 			}
 			if size >= Max_Atlas_Width {
 				// Reached the largest allowed size without fitting everything.
-				return Atlas_Too_Small_Error { sprites = sprites }
+				return Atlas_Too_Small_Error{sprites = sprites}
 			}
 			size *= 2
 		}
@@ -157,7 +153,8 @@ pack_sprites_to_atlas :: proc(
 	} else {
 		packed := pack_sprites_skyline(
 			sprites,
-			width, height,
+			width,
+			height,
 			opt.sprite_padding,
 			opt.heuristic,
 			opt.sort,
@@ -166,15 +163,25 @@ pack_sprites_to_atlas :: proc(
 		if packed != len(sprites) {
 			// Not everything fit. The sprite slice's Odin memory stays arena
 			// owned; the caller releases the SDL surfaces and reports failures.
-			return Atlas_Too_Small_Error { sprites = sprites }
+			return Atlas_Too_Small_Error{sprites = sprites}
 		}
 	}
 	defer free_sprite_surfaces(sprites)
 
 	fmt.eprintf("Packed %d sprites into %dx%d atlas\n", len(sprites), width, height)
 
+	// Resolve any .Auto map format from the output extension up front, while
+	// nothing has been written yet. This way an unresolvable extension fails
+	// cleanly instead of truncating a pre-existing map file (os.open with
+	// O_TRUNC) or leaving a fresh atlas PNG with no map behind.
+	resolved_format: Map_Format
+	resolved_format, ferr = resolve_map_format(opt.map_format, opt.sprite_map_path, allocator)
+	if ferr != nil {
+		return ferr
+	}
+
 	// Composite the atlas image
-	atlas, cerr := create_atlas_surface(width, height)
+	atlas, cerr := create_atlas_surface(width, height, allocator)
 	if cerr != nil {
 		return cerr
 	}
@@ -191,7 +198,7 @@ pack_sprites_to_atlas :: proc(
 	}
 
 	err = save_atlas_sprite_map(
-		opt.map_format,
+		resolved_format,
 		opt.sprite_map_path,
 		opt.map_enum_prefix,
 		opt.map_array_name,
@@ -211,9 +218,11 @@ pack_sprites_to_atlas :: proc(
 // atlas_path, creating any missing parent directories.
 save_texture_atlas :: proc(
 	atlas_path: string,
-	atlas:      ^sdl.Surface,
-	allocator:  mem.Allocator,
-) -> (err: Error) {
+	atlas: ^sdl.Surface,
+	allocator: mem.Allocator,
+) -> (
+	err: Error,
+) {
 	// Create parent directories (ignore "already exists").
 	if dir := filepath.dir(atlas_path); dir != "." && len(dir) > 0 {
 		merr := os.make_directory_all(dir)

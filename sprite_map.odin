@@ -22,26 +22,55 @@ import u "../dssodinlib/utils"
 // comment warning that the file is generated, so it is not hand-edited.
 generated_banner :: "/* DO NOT EDIT; generated with tpack */\n\n"
 
+// resolve_map_format turns a possibly-.Auto Map_Format into a concrete one by
+// inspecting the output file extension. It is called up front, before anything
+// is written, so an unresolvable extension fails without truncating an existing
+// output file or leaving a fresh atlas PNG with no map behind.
+resolve_map_format :: proc(
+	format: Map_Format,
+	sprite_map_path: string,
+	allocator: mem.Allocator,
+) -> (
+	resolved: Map_Format,
+	err: Error,
+) {
+	if format != .Auto {
+		return format, nil
+	}
+	ext := strings.to_lower(filepath.ext(sprite_map_path), context.temp_allocator)
+	if f, found := ext_to_map_format[ext]; found {
+		return f, nil
+	}
+	return .Auto, fmt.aprintf(
+		"cannot determine sprite map format from extension of %s",
+		sprite_map_path,
+		allocator = allocator,
+	)
+}
+
 // save_atlas_sprite_map writes the sprite map to sprite_map_path, creating
-// the parent directory if needed. When format is Auto the format is inferred
-// from the output file extension. allocator is used for any descriptive error
-// strings; the actual map body is streamed to disk, so it does not accumulate
-// in memory.
+// the parent directory if needed. format must already be concrete (the caller
+// resolves .Auto via resolve_map_format before any file is opened, so an
+// unresolvable extension never truncates an existing output). allocator is
+// used for any descriptive error strings; the actual map body is streamed to
+// disk, so it does not accumulate in memory.
 //
 // spr_root and spr_scale_mode are used only by the binary .spr writer: the
 // former is the project root that sprite path hashes are made relative to,
 // and the latter is recorded in the spr header's scale_mode byte.
 save_atlas_sprite_map :: proc(
-	format:          Map_Format,
+	format: Map_Format,
 	sprite_map_path: string,
 	map_enum_prefix: string,
-	map_array_name:  string,
-	map_array_type:  string,
-	sprites:         []Sprite,
-	spr_root:        string,
-	spr_scale_mode:  Spr_Scale_Mode,
-	allocator:       mem.Allocator,
-) -> (err: Error) {
+	map_array_name: string,
+	map_array_type: string,
+	sprites: []Sprite,
+	spr_root: string,
+	spr_scale_mode: Spr_Scale_Mode,
+	allocator: mem.Allocator,
+) -> (
+	err: Error,
+) {
 	// Create parent directories (ignore "already exists").
 	if dir := filepath.dir(sprite_map_path); dir != "." && len(dir) > 0 {
 		merr := os.make_directory_all(dir)
@@ -51,15 +80,6 @@ save_atlas_sprite_map :: proc(
 				os.error_string(merr),
 				allocator = allocator,
 			)
-		}
-	}
-
-	// Resolve the Auto format from the output extension.
-	resolved_format := format
-	if resolved_format == .Auto {
-		ext := strings.to_lower(filepath.ext(sprite_map_path), context.temp_allocator)
-		if f, found := ext_to_map_format[ext]; found {
-			resolved_format = f
 		}
 	}
 
@@ -79,7 +99,7 @@ save_atlas_sprite_map :: proc(
 	}
 	defer os.close(handle)
 
-	#partial switch resolved_format {
+	#partial switch format {
 	case .JSON:
 		write_json_sprite_map(handle, sprites)
 	case .SSM:
@@ -88,20 +108,14 @@ save_atlas_sprite_map :: proc(
 		write_c_sprite_map(handle, map_array_name, sprites)
 	case .Structured_C:
 		write_structured_c_sprite_map(
-			handle          = handle,
+			handle = handle,
 			map_enum_prefix = map_enum_prefix,
-			map_array_name  = map_array_name,
-			map_array_type  = map_array_type,
-			sprites         = sprites,
+			map_array_name = map_array_name,
+			map_array_type = map_array_type,
+			sprites = sprites,
 		)
 	case .SPR:
-		werr := write_spr_sprite_map(
-			handle,
-			sprites,
-			spr_root,
-			spr_scale_mode,
-			allocator,
-		)
+		werr := write_spr_sprite_map(handle, sprites, spr_root, spr_scale_mode, allocator)
 		if werr != nil {
 			return werr
 		}
@@ -115,7 +129,8 @@ save_atlas_sprite_map :: proc(
 		return fmt.aprintf(
 			"unknown format of sprite map %s",
 			sprite_map_path,
-			allocator = allocator),
+			allocator = allocator,
+		)
 
 	}
 	return
@@ -133,8 +148,15 @@ write_json_sprite_map :: proc(handle: ^os.File, sprites: []Sprite) {
 	os.write_string(handle, "{\n")
 	for &s, i in sprites {
 		escaped := escape_json_string(s.image_path, context.temp_allocator)
-		fmt.fprintf(handle, "  \"%s\": {{ \"x\": %d, \"y\": %d, \"w\": %d, \"h\": %d }}",
-			escaped, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
+		fmt.fprintf(
+			handle,
+			"  \"%s\": {{ \"x\": %d, \"y\": %d, \"w\": %d, \"h\": %d }}",
+			escaped,
+			s.offset.x,
+			s.offset.y,
+			s.surface.w,
+			s.surface.h,
+		)
 		if i != len(sprites) - 1 {
 			os.write_string(handle, ",")
 		}
@@ -152,8 +174,15 @@ write_json_sprite_map :: proc(handle: ^os.File, sprites: []Sprite) {
 write_ssm_sprite_map :: proc(handle: ^os.File, sprites: []Sprite) {
 	for s in sprites {
 		escaped := escape_ssm_field(s.image_path, context.temp_allocator)
-		fmt.fprintf(handle, "S\t%s\t%d\t%d\t%d\t%d\n",
-			escaped, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
+		fmt.fprintf(
+			handle,
+			"S\t%s\t%d\t%d\t%d\t%d\n",
+			escaped,
+			s.offset.x,
+			s.offset.y,
+			s.surface.w,
+			s.surface.h,
+		)
 	}
 }
 
@@ -163,11 +192,7 @@ write_ssm_sprite_map :: proc(handle: ^os.File, sprites: []Sprite) {
 //	const struct { const char *filename; int x, y, w, h; } sprites[] = {
 //	  { .filename = "...", .x = 0, .y = 0, .w = 16, .h = 16 },
 //	};
-write_c_sprite_map :: proc(
-	handle:         ^os.File,
-	map_array_name: string,
-	sprites:        []Sprite,
-) {
+write_c_sprite_map :: proc(handle: ^os.File, map_array_name: string, sprites: []Sprite) {
 	os.write_string(handle, generated_banner)
 	os.write_string(handle, "const struct {\n")
 	os.write_string(handle, "  const char *filename;\n")
@@ -175,8 +200,15 @@ write_c_sprite_map :: proc(
 	fmt.fprintf(handle, "}} %s[] = {{\n", map_array_name)
 	for s in sprites {
 		escaped := escape_json_string(s.image_path, context.temp_allocator)
-		fmt.fprintf(handle, "  {{ .filename = \"%s\", .x = %d, .y = %d, .w = %d, .h = %d }},\n",
-			escaped, s.offset.x, s.offset.y, s.surface.w, s.surface.h)
+		fmt.fprintf(
+			handle,
+			"  {{ .filename = \"%s\", .x = %d, .y = %d, .w = %d, .h = %d }},\n",
+			escaped,
+			s.offset.x,
+			s.offset.y,
+			s.surface.w,
+			s.surface.h,
+		)
 	}
 	os.write_string(handle, "};\n")
 }
@@ -194,11 +226,11 @@ write_c_sprite_map :: proc(
 // The array body is guarded by <prefix>_IMPLEMENTATION so callers include the
 // header for declarations and define it once to get the definition.
 write_structured_c_sprite_map :: proc(
-	handle:          ^os.File,
+	handle: ^os.File,
 	map_enum_prefix: string,
-	map_array_name:  string,
-	map_array_type:  string,
-	sprites:         []Sprite,
+	map_array_name: string,
+	map_array_type: string,
+	sprites: []Sprite,
 ) {
 	os.write_string(handle, generated_banner)
 	os.write_string(handle, "enum {\n")
@@ -210,9 +242,16 @@ write_structured_c_sprite_map :: proc(
 	fmt.fprintf(handle, "#ifdef %s_IMPLEMENTATION\n", map_enum_prefix)
 	fmt.fprintf(handle, "const %s %s[] = {{\n", map_array_type, map_array_name)
 	for s in sprites {
-		fmt.fprintf(handle, " [%s%s] = {{ .x = %d, .y = %d, .w = %d, .h = %d }},\n",
-			map_enum_prefix, image_path_to_enum_name(s.image_path),
-			s.offset.x, s.offset.y, s.surface.w, s.surface.h)
+		fmt.fprintf(
+			handle,
+			" [%s%s] = {{ .x = %d, .y = %d, .w = %d, .h = %d }},\n",
+			map_enum_prefix,
+			image_path_to_enum_name(s.image_path),
+			s.offset.x,
+			s.offset.y,
+			s.surface.w,
+			s.surface.h,
+		)
 	}
 	os.write_string(handle, "};\n")
 	fmt.fprintf(handle, "#endif /* %s_IMPLEMENTATION */\n", map_enum_prefix)
@@ -310,11 +349,11 @@ spr_rel_path :: proc(image_path, spr_root: string) -> string {
 // no root is given), so the hash is project-wide unique and implies the full
 // relative filename. They are emitted in ascending order for binary search.
 write_spr_sprite_map :: proc(
-	handle:     ^os.File,
-	sprites:    []Sprite,
-	spr_root:   string,
+	handle: ^os.File,
+	sprites: []Sprite,
+	spr_root: string,
 	scale_mode: Spr_Scale_Mode,
-	allocator:  mem.Allocator,
+	allocator: mem.Allocator,
 ) -> Error {
 	count := len(sprites)
 
@@ -345,16 +384,23 @@ write_spr_sprite_map :: proc(
 	data_len := size_of(spr_header) + count * (size_of(u32le) + size_of(spr_crop))
 	data := make([]byte, data_len, allocator)
 
-	header := spr_header {
-		magic        = Spr_Magic,
-		version      = u32le(Spr_Version),
-		scale_mode   = scale_mode,
-		sprite_count = u32le(u32(count)),
-	}
-	mem.copy(raw_data(data), &header, size_of(spr_header))
+	// Write the header directly into the buffer, field by field. make() already
+	// zeroed every byte, and per-field writes never touch the struct's implicit
+	// padding (bytes 9..11, after scale_mode), so it stays zero - no hardcoded
+	// byte offsets, and the .spr output is byte-deterministic across runs.
+	//
+	// (Copying a stack-allocated header struct here instead would carry its
+	// uninitialized padding bytes into the file.)
+	header := cast(^spr_header)raw_data(data)
+	header.magic = Spr_Magic
+	header.version = u32le(Spr_Version)
+	header.scale_mode = scale_mode
+	header.sprite_count = u32le(u32(count))
 
 	hashes := (cast([^]u32le)raw_data(data[size_of(spr_header):]))[:count]
-	crops := (cast([^]spr_crop)raw_data(data[size_of(spr_header) + count * size_of(u32le):]))[:count]
+	crops := (cast([^]spr_crop)raw_data(
+			data[size_of(spr_header) + count * size_of(u32le):],
+		))[:count]
 	for e, i in entries {
 		hashes[i] = e.hash
 		crops[i] = e.crop
@@ -369,7 +415,8 @@ write_spr_sprite_map :: proc(
 	} else if n != len(data) {
 		return fmt.aprintf(
 			"error writing sprite map file: short write (%d of %d bytes)",
-			n, len(data),
+			n,
+			len(data),
 			allocator = allocator,
 		)
 	}

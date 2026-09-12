@@ -23,29 +23,27 @@ import "core:mem/virtual"
 import "core:os"
 import "core:strings"
 
-import rp "../dssodinlib/rect_pack"
-
 // Options mirrors the CLI: named flags and three positional arguments.
 // Field tags drive the core:flags parser (UNIX style: --name value).
 Options :: struct {
-	dir:             string `args:"pos=0,required"`,       // sprites directory
-	atlas_path:      string `args:"pos=1,required"`,       // output atlas PNG
-	sprite_map:      string `args:"pos=2,required"`,       // output sprite map
-	atlas_width:     int    `args:"name=width"`,           // atlas width (0 = unset; overridden by auto-size)
-	atlas_height:    int    `args:"name=height"`,          // atlas height (0 = unset; overridden by auto-size)
-	auto_size:       bool   `args:"name=auto-size"`,       // fit the smallest power-of-two atlas (default)
-	no_auto_size:    bool   `args:"name=no-auto-size"`,    // use explicit/default dimensions instead
-	spr_root:        string `args:"name=spr-root"`,        // project root for spr path hashing
-	sprite_padding:  int    `args:"name=sprite-padding"`,  // gap between sprites
-	heuristic:       string `args:"name=heuristic"`,       // bl (bottom-left) or bf (best-fit)
-	scale_mode:      string `args:"name=scale-mode"`,      // nearest, linear, or pixel-art
-	no_sort:         bool   `args:"name=no-sort"`,         // disable size pre-sorting
-	map_format:      string `args:"name=map-format"`,      // auto/c/structured-c/json/ssm/spr
+	dir:             string `args:"pos=0,required"`, // sprites directory
+	atlas_path:      string `args:"pos=1,required"`, // output atlas PNG
+	sprite_map:      string `args:"pos=2,required"`, // output sprite map
+	atlas_width:     int `args:"name=width"`, // atlas width (0 = unset; overridden by auto-size)
+	atlas_height:    int `args:"name=height"`, // atlas height (0 = unset; overridden by auto-size)
+	auto_size:       bool `args:"name=auto-size"`, // fit the smallest power-of-two atlas (default)
+	no_auto_size:    bool `args:"name=no-auto-size"`, // use explicit/default dimensions instead
+	spr_root:        string `args:"name=spr-root"`, // project root for spr path hashing
+	sprite_padding:  int `args:"name=sprite-padding"`, // gap between sprites
+	heuristic:       string `args:"name=heuristic"`, // bl (bottom-left) or bf (best-fit)
+	scale_mode:      string `args:"name=scale-mode"`, // nearest, linear, or pixel-art
+	no_sort:         bool `args:"name=no-sort"`, // disable size pre-sorting
+	map_format:      string `args:"name=map-format"`, // auto/c/structured-c/json/ssm/spr
 	map_enum_prefix: string `args:"name=map-enum-prefix"`, // enum prefix (structured-c)
-	map_array_name:  string `args:"name=map-array-name"`,  // array name (c/structured-c)
-	map_array_type:  string `args:"name=map-array-type"`,  // array element type (structured-c)
-	no_overwrite:    bool   `args:"name=no-overwrite"`,    // refuse to overwrite outputs
-	incremental:     bool   `args:"name=incremental"`,     // skip rebuild when outputs are current
+	map_array_name:  string `args:"name=map-array-name"`, // array name (c/structured-c)
+	map_array_type:  string `args:"name=map-array-type"`, // array element type (structured-c)
+	no_overwrite:    bool `args:"name=no-overwrite"`, // refuse to overwrite outputs
+	incremental:     bool `args:"name=incremental"`, // skip rebuild when outputs are current
 }
 
 // main parses arguments, validates them, runs the packing pipeline, and
@@ -80,7 +78,12 @@ main :: proc() {
 		case flags.Validation_Error:
 			fmt.eprintfln("%s: %s", os.args[0], e.message)
 		case flags.Open_File_Error:
-			fmt.eprintfln("%s: cannot open %s: %s", os.args[0], e.filename, os.error_string(e.errno))
+			fmt.eprintfln(
+				"%s: cannot open %s: %s",
+				os.args[0],
+				e.filename,
+				os.error_string(e.errno),
+			)
 		}
 		os.exit(2)
 	}
@@ -142,10 +145,12 @@ main :: proc() {
 	defer virtual.arena_destroy(&arena)
 	allocator := virtual.arena_allocator(&arena)
 
-	// Resolve sizing
+	// Resolve sizing.
 	//
 	// Auto-size is the default. Supplying either --width or --height (or the
-	// explicit --no-auto-size flag) switches to explicit dimensions; any
+	// explicit --no-auto-size flag) switches to explicit dimensions, and
+	// explicit dimensions ALWAYS win - even when --auto-size is also given, so
+	// "auto-size but honour my width" is not silently misinterpreted. Any
 	// dimension left at 0 falls back to its default.
 	explicit_w := opt.atlas_width != 0
 	explicit_h := opt.atlas_height != 0
@@ -153,25 +158,28 @@ main :: proc() {
 	atlas_width := opt.atlas_width == 0 ? Default_Atlas_Width : opt.atlas_width
 	atlas_height := opt.atlas_height == 0 ? Default_Atlas_Height : opt.atlas_height
 
-	err := pack_sprites_to_atlas({
-		dir             = opt.dir,
-		atlas_path      = opt.atlas_path,
-		sprite_map_path = opt.sprite_map,
-		atlas_width     = atlas_width,
-		atlas_height    = atlas_height,
-		auto_size       = use_auto_size,
-		spr_root        = opt.spr_root,
-		spr_scale_mode  = scale_mode,
-		sprite_padding  = opt.sprite_padding,
-		heuristic       = heuristic,
-		sort            = !opt.no_sort,
-		map_format      = map_format,
-		map_enum_prefix = opt.map_enum_prefix,
-		map_array_name  = opt.map_array_name,
-		map_array_type  = opt.map_array_type,
-		no_overwrite    = opt.no_overwrite,
-		incremental     = opt.incremental,
-	}, allocator)
+	err := pack_sprites_to_atlas(
+		{
+			dir = opt.dir,
+			atlas_path = opt.atlas_path,
+			sprite_map_path = opt.sprite_map,
+			atlas_width = atlas_width,
+			atlas_height = atlas_height,
+			auto_size = use_auto_size,
+			spr_root = opt.spr_root,
+			spr_scale_mode = scale_mode,
+			sprite_padding = opt.sprite_padding,
+			heuristic = heuristic,
+			sort = !opt.no_sort,
+			map_format = map_format,
+			map_enum_prefix = opt.map_enum_prefix,
+			map_array_name = opt.map_array_name,
+			map_array_type = opt.map_array_type,
+			no_overwrite = opt.no_overwrite,
+			incremental = opt.incremental,
+		},
+		allocator,
+	)
 	if err != nil {
 		// Translate the typed error union into a human-readable message. The
 		// switch is exhaustive over Error's members, so every variant is turned
@@ -210,20 +218,52 @@ usage :: proc(program: string) {
 	fmt.eprintf("  atlas_path       Output atlas image path (PNG)\n")
 	fmt.eprintf("  sprite_map_path  Output sprite map path\n\n")
 	fmt.eprintf("Options:\n")
-	fmt.eprintf("  --width <n>            Atlas width (default: %d, max: %d)\n", Default_Atlas_Width, Max_Atlas_Width)
-	fmt.eprintf("  --height <n>           Atlas height (default: %d, max: %d)\n", Default_Atlas_Height, Max_Atlas_Height)
-	fmt.eprintf("  --auto-size            Fit the smallest square power-of-two atlas for all sprites\n")
+	fmt.eprintf(
+		"  --width <n>            Atlas width (default: %d, max: %d)\n",
+		Default_Atlas_Width,
+		Max_Atlas_Width,
+	)
+	fmt.eprintf(
+		"  --height <n>           Atlas height (default: %d, max: %d)\n",
+		Default_Atlas_Height,
+		Max_Atlas_Height,
+	)
+	fmt.eprintf(
+		"  --auto-size            Fit the smallest square power-of-two atlas for all sprites\n",
+	)
 	fmt.eprintf("                           (default; used unless --width/--height are given)\n")
 	fmt.eprintf("  --no-auto-size         Use explicit/default dimensions instead of auto-size\n")
 	fmt.eprintf("  --spr-root <dir>       Project root: spr hashes paths relative to this\n")
-	fmt.eprintf("  --sprite-padding <n>   Padding between sprites (default: %d, max: %d)\n", Default_Sprite_Padding, Max_Sprite_Padding)
-	fmt.eprintf("  --heuristic <h>        Packing heuristic: bl (bottom-left) or bf (best-fit) (default: %s)\n", Default_Heuristic)
-	fmt.eprintf("  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: %s)\n", Default_Scale_Mode)
+	fmt.eprintf(
+		"  --sprite-padding <n>   Padding between sprites (default: %d, max: %d)\n",
+		Default_Sprite_Padding,
+		Max_Sprite_Padding,
+	)
+	fmt.eprintf(
+		"  --heuristic <h>        Packing heuristic: bl (bottom-left) or bf (best-fit) (default: %s)\n",
+		Default_Heuristic,
+	)
+	fmt.eprintf(
+		"  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: %s)\n",
+		Default_Scale_Mode,
+	)
 	fmt.eprintf("  --no-sort              Don't sort sprites before packing\n")
-	fmt.eprintf("  --map-format <f>       Sprite map format: auto, c, structured-c, json, ssm, spr (default: %s)\n", Default_Map_Format)
-	fmt.eprintf("  --map-enum-prefix <p>  Enum prefix for structured-c (default: %s)\n", Default_Map_Enum_Prefix)
-	fmt.eprintf("  --map-array-name <n>   Array name for C output (default: %s)\n", Default_Map_Array_Name)
-	fmt.eprintf("  --map-array-type <t>   Array type for structured-c (default: %s)\n", Default_Map_Array_Type)
+	fmt.eprintf(
+		"  --map-format <f>       Sprite map format: auto, c, structured-c, json, ssm, spr (default: %s)\n",
+		Default_Map_Format,
+	)
+	fmt.eprintf(
+		"  --map-enum-prefix <p>  Enum prefix for structured-c (default: %s)\n",
+		Default_Map_Enum_Prefix,
+	)
+	fmt.eprintf(
+		"  --map-array-name <n>   Array name for C output (default: %s)\n",
+		Default_Map_Array_Name,
+	)
+	fmt.eprintf(
+		"  --map-array-type <t>   Array type for structured-c (default: %s)\n",
+		Default_Map_Array_Type,
+	)
 	fmt.eprintf("  --no-overwrite         Don't overwrite existing output files\n")
 	fmt.eprintf("  --incremental          Skip the rebuild if the atlas and sprite map\n")
 	fmt.eprintf("                           are newer than every source sprite\n")

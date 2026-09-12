@@ -26,6 +26,11 @@ Test_Case :: struct {
 	args:        []string,
 	outputs:     []Expected_File,
 	expect_exit: int, // required process exit code; -1 = any non-zero
+	// setup, when non-nil, prepares fixture files after stale-output removal.
+	setup:       proc(),
+	// verify, when non-nil, runs extra assertions after the output checks and
+	// must succeed for the case to pass.
+	verify:      proc() -> bool,
 }
 
 // failures collects human-readable reasons for the final summary. Messages
@@ -43,11 +48,12 @@ main :: proc() {
 		os.exit(1)
 	}
 
-	tests := []Test_Case{
+	tests := []Test_Case {
 		{
 			name = "c map (auto-size)",
 			args = {
-				"--map-format", "c",
+				"--map-format",
+				"c",
 				"test/sprites",
 				"test/textures/harness_c.png",
 				"test/textures/harness_c.c",
@@ -55,41 +61,57 @@ main :: proc() {
 			outputs = {
 				{path = "test/textures/harness_c.png"},
 				{path = "test/textures/harness_c.c", must_contain = "test/sprites/wieldhand.png"},
-				{path = "test/textures/harness_c.c", must_contain = "test/sprites/zuma/green-ball.png"},
+				{
+					path = "test/textures/harness_c.c",
+					must_contain = "test/sprites/zuma/green-ball.png",
+				},
 			},
 		},
 		{
 			name = "json map (auto-size)",
 			args = {
-				"--map-format", "json",
+				"--map-format",
+				"json",
 				"test/sprites",
 				"test/textures/harness_json.png",
 				"test/textures/harness_json.json",
 			},
 			outputs = {
 				{path = "test/textures/harness_json.png"},
-				{path = "test/textures/harness_json.json", must_contain = `"test/sprites/wieldhand.png"`},
-				{path = "test/textures/harness_json.json", must_contain = `"test/sprites/zuma/zuma.png"`},
+				{
+					path = "test/textures/harness_json.json",
+					must_contain = `"test/sprites/wieldhand.png"`,
+				},
+				{
+					path = "test/textures/harness_json.json",
+					must_contain = `"test/sprites/zuma/zuma.png"`,
+				},
 			},
 		},
 		{
 			name = "ssm map (auto-size)",
 			args = {
-				"--map-format", "ssm",
+				"--map-format",
+				"ssm",
 				"test/sprites",
 				"test/textures/harness_ssm.png",
 				"test/textures/harness_ssm.ssm",
 			},
 			outputs = {
 				{path = "test/textures/harness_ssm.png"},
-				{path = "test/textures/harness_ssm.ssm", must_contain = "test/sprites/wieldhand.png"},
+				{
+					path = "test/textures/harness_ssm.ssm",
+					must_contain = "test/sprites/wieldhand.png",
+				},
 			},
 		},
 		{
 			name = "spr map (spr-root)",
 			args = {
-				"--map-format", "spr",
-				"--spr-root", "test/sprites",
+				"--map-format",
+				"spr",
+				"--spr-root",
+				"test/sprites",
 				"test/sprites",
 				"test/textures/harness_spr.png",
 				"test/textures/harness_spr.spr",
@@ -98,14 +120,58 @@ main :: proc() {
 				{path = "test/textures/harness_spr.png"},
 				{path = "test/textures/harness_spr.spr", must_contain = "SPRS"},
 			},
+			// Beyond a bare "SPRS" exists-check, validate the header layout
+			// against docs/spr-format-spec.md: the implicit padding after
+			// scale_mode (bytes 9..11) must be zero, or the file is
+			// byte-nondeterministic across runs (uninitialized struct
+			// padding).
+			verify = proc() -> bool {
+				data, rerr := os.read_entire_file(
+					"test/textures/harness_spr.spr",
+					context.temp_allocator,
+				)
+				if rerr != nil {
+					return false
+				}
+				if len(data) < 16 {
+					return false
+				}
+				if string(data[0:4]) != "SPRS" {
+					return false
+				}
+				version :=
+					u32(data[4]) | u32(data[5]) << 8 | u32(data[6]) << 16 | u32(data[7]) << 24
+				if version != 1 {
+					return false
+				}
+				if data[8] != 1 { 	// default --scale-mode is linear
+					return false
+				}
+				if data[9] != 0 || data[10] != 0 || data[11] != 0 {
+					return false
+				}
+				count :=
+					u32(data[12]) | u32(data[13]) << 8 | u32(data[14]) << 16 | u32(data[15]) << 24
+				if count == 0 {
+					return false
+				}
+				if len(data) != 16 + int(count) * 12 {
+					return false
+				}
+				return true
+			},
 		},
 		{
 			name = "structured-c map",
 			args = {
-				"--map-format", "structured-c",
-				"--map-enum-prefix", "HARNESS_",
-				"--map-array-name", "harness_sprites",
-				"--map-array-type", "Harness_Rect",
+				"--map-format",
+				"structured-c",
+				"--map-enum-prefix",
+				"HARNESS_",
+				"--map-array-name",
+				"harness_sprites",
+				"--map-array-type",
+				"Harness_Rect",
 				"test/sprites",
 				"test/textures/harness_struct.png",
 				"test/textures/harness_struct.c",
@@ -114,18 +180,26 @@ main :: proc() {
 				{path = "test/textures/harness_struct.png"},
 				{path = "test/textures/harness_struct.c", must_contain = "HARNESS_Wieldhand"},
 				{path = "test/textures/harness_struct.c", must_contain = "HARNESS_Green_Ball"},
-				{path = "test/textures/harness_struct.c", must_contain = "Harness_Rect harness_sprites[]"},
+				{
+					path = "test/textures/harness_struct.c",
+					must_contain = "Harness_Rect harness_sprites[]",
+				},
 			},
 		},
 		{
 			name = "explicit size + bf + padding",
 			args = {
-				"--width", "2048",
-				"--height", "2048",
+				"--width",
+				"2048",
+				"--height",
+				"2048",
 				"--no-auto-size",
-				"--heuristic", "bf",
-				"--sprite-padding", "4",
-				"--map-format", "c",
+				"--heuristic",
+				"bf",
+				"--sprite-padding",
+				"4",
+				"--map-format",
+				"c",
 				"test/sprites",
 				"test/textures/harness_bf.png",
 				"test/textures/harness_bf.c",
@@ -139,7 +213,8 @@ main :: proc() {
 			name = "negative: --no-overwrite refuses existing output",
 			args = {
 				"--no-overwrite",
-				"--map-format", "c",
+				"--map-format",
+				"c",
 				"test/sprites",
 				"test/textures/harness_noovw.png",
 				"test/textures/harness_noovw.c",
@@ -149,7 +224,8 @@ main :: proc() {
 		{
 			name = "negative: invalid map format",
 			args = {
-				"--map-format", "bogus",
+				"--map-format",
+				"bogus",
 				"test/sprites",
 				"test/textures/harness_bogus.png",
 				"test/textures/harness_bogus.c",
@@ -159,12 +235,47 @@ main :: proc() {
 		{
 			name = "negative: invalid heuristic",
 			args = {
-				"--heuristic", "nope",
+				"--heuristic",
+				"nope",
 				"test/sprites",
 				"test/textures/harness_heur.png",
 				"test/textures/harness_heur.c",
 			},
 			expect_exit = 2,
+		},
+		{
+			name = "negative: auto format with unknown extension",
+			// No --map-format: auto is the default, and .dat is not a known
+			// sprite-map extension. The failure must happen BEFORE any file
+			// is touched: the pre-existing .dat may not be truncated, and
+			// the atlas PNG must not be written at all.
+			args = {
+				"test/sprites",
+				"test/textures/harness_auto.png",
+				"test/textures/harness_auto.dat",
+			},
+			expect_exit = 1,
+			setup = proc() {
+				os.remove("test/textures/harness_auto.png")
+				os.remove("test/textures/harness_auto.dat")
+				_ = os.write_entire_file("test/textures/harness_auto.dat", "PRECIOUS\n")
+			},
+			verify = proc() -> bool {
+				data, rerr := os.read_entire_file(
+					"test/textures/harness_auto.dat",
+					context.temp_allocator,
+				)
+				if rerr != nil {
+					return false
+				}
+				if string(data) != "PRECIOUS\n" {
+					return false
+				}
+				if os.exists("test/textures/harness_auto.png") {
+					return false
+				}
+				return true
+			},
 		},
 	}
 
@@ -227,6 +338,12 @@ run_test :: proc(t: Test_Case) -> bool {
 		os.remove(output.path)
 	}
 
+	// Let the case prepare fixtures (e.g. a pre-existing file that must not
+	// be clobbered) after stale-output removal.
+	if t.setup != nil {
+		t.setup()
+	}
+
 	cmd := make([dynamic]string, 0, len(t.args) + 1, context.temp_allocator)
 	append(&cmd, "./tpack")
 	append(&cmd, ..t.args)
@@ -267,6 +384,11 @@ run_test :: proc(t: Test_Case) -> bool {
 				nil,
 			)
 		}
+	}
+
+	// Extra per-case assertions (header layout, on-disk invariants, ...).
+	if t.verify != nil && !t.verify() {
+		return fail_test(t.name, "custom verification failed", nil, nil)
 	}
 
 	fmt.println("PASS")

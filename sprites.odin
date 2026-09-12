@@ -13,8 +13,8 @@ import "core:path/filepath"
 import "core:slice"
 import "core:strings"
 
-import img "vendor:sdl2/image"
 import sdl "vendor:sdl2"
+import img "vendor:sdl2/image"
 
 import u "../dssodinlib/utils"
 
@@ -25,10 +25,10 @@ import u "../dssodinlib/utils"
 // successfully placed. A sprite that did not fit keeps offset zeroed and
 // packed = false.
 Sprite :: struct {
-	offset:     [2]int,       // top-left position in the atlas
-	image_path: string,       // filesystem path the sprite was loaded from
+	offset:     [2]int, // top-left position in the atlas
+	image_path: string, // filesystem path the sprite was loaded from
 	surface:    ^sdl.Surface, // decoded ABGR8888 pixel data
-	packed:     bool,         // whether the sprite was placed in the atlas
+	packed:     bool, // whether the sprite was placed in the atlas
 }
 
 // find_and_read_sprites discovers every file with the given extension under
@@ -41,12 +41,12 @@ Sprite :: struct {
 // arena-managed, must be released via free_sprite_surfaces. On error the slice
 // is nil and a descriptive error is returned.
 find_and_read_sprites :: proc(
-	path:      string,
-	file_ext:  string,
+	path: string,
+	file_ext: string,
 	allocator: mem.Allocator,
 ) -> (
 	sprites: []Sprite,
-	err:     Error,
+	err: Error,
 ) {
 	filenames, ferr := find_image_files(path, file_ext, allocator)
 	if ferr != nil {
@@ -83,12 +83,12 @@ find_and_read_sprites :: proc(
 // dir_path whose name ends (case-insensitively) with extension. The returned
 // slice and each path string are allocated in allocator (typically an arena).
 find_image_files :: proc(
-	dir_path:  string,
+	dir_path: string,
 	extension: string,
 	allocator: mem.Allocator,
 ) -> (
 	paths: []string,
-	err:   os.Error,
+	err: os.Error,
 ) {
 	dyn := make([dynamic]string, 0, 100, allocator)
 	werr := walk_image_dir(dir_path, "", extension, &dyn, allocator)
@@ -106,12 +106,14 @@ find_image_files :: proc(
 // name so the resulting list (and therefore the atlas layout) is
 // deterministic across runs.
 walk_image_dir :: proc(
-	root:      string,
-	rel:       string,
+	root: string,
+	rel: string,
 	extension: string,
-	out:       ^[dynamic]string,
+	out: ^[dynamic]string,
 	allocator: mem.Allocator,
-) -> (err: os.Error) {
+) -> (
+	err: os.Error,
+) {
 	open_path := root
 	if len(rel) > 0 {
 		open_path, _ = filepath.join({root, rel}, context.temp_allocator)
@@ -129,7 +131,7 @@ walk_image_dir :: proc(
 	}
 
 	// Sort entries so traversal order (and sprite order) is deterministic.
-	slice.sort_by(entries, proc(a, b: os.File_Info) -> bool { return a.name < b.name })
+	slice.sort_by(entries, proc(a, b: os.File_Info) -> bool {return a.name < b.name})
 
 	for e in entries {
 		child_rel, _ := filepath.join(
@@ -163,36 +165,23 @@ walk_image_dir :: proc(
 // The error is a plain string ("" on success) so the caller never has to
 // decode a non-string error variant.
 read_sprite_from_file :: proc(
-	path:      string,
+	path: string,
 	allocator: mem.Allocator,
 ) -> (
 	sprite: Sprite,
-	err:    string,
+	err: string,
 ) {
 	raw := img.Load(strings.clone_to_cstring(path, context.temp_allocator))
 	if raw == nil {
-		return {}, fmt.aprintf(
-			"cannot load image %s: %s",
-			path,
-			sdl.GetErrorString(),
-			allocator = allocator,
-		)
+		return {}, fmt.aprintf("cannot load image %s: %s", path, sdl.GetErrorString(), allocator = allocator)
 	}
 	defer sdl.FreeSurface(raw)
 
 	surface := sdl.ConvertSurfaceFormat(raw, u32(sdl.PixelFormatEnum.ABGR8888), 0)
 	if surface == nil {
-		return {}, fmt.aprintf(
-			"cannot convert image %s: %s",
-			path,
-			sdl.GetErrorString(),
-			allocator = allocator,
-		)
+		return {}, fmt.aprintf("cannot convert image %s: %s", path, sdl.GetErrorString(), allocator = allocator)
 	}
-	return Sprite {
-		image_path = strings.clone(path, allocator),
-		surface    = surface,
-	}, ""
+	return Sprite{image_path = strings.clone(path, allocator), surface = surface}, ""
 }
 
 // free_sprite_surfaces releases the SDL surface of every sprite.

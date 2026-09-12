@@ -14,12 +14,12 @@ import u "../dssodinlib/utils"
 
 // Map_Format enumerates the supported sprite-map output formats.
 Map_Format :: enum {
-	Auto,         // infer from the output file extension
-	C,            // plain C: struct + array of {filename, x, y, w, h}
+	Auto, // infer from the output file extension
+	C, // plain C: struct + array of {filename, x, y, w, h}
 	Structured_C, // C with a generated enum keyed by sprite name
-	JSON,         // JSON object keyed by image path
-	SSM,          // tab-separated Simple Sprite Map ("S\tpath\tx\ty\tw\th")
-	SPR,          // binary sprite bundle keyed by FNV-1a path hash
+	JSON, // JSON object keyed by image path
+	SSM, // tab-separated Simple Sprite Map ("S\tpath\tx\ty\tw\th")
+	SPR, // binary sprite bundle keyed by FNV-1a path hash
 }
 
 // Spr_Scale_Mode is the GPU texture filtering mode recorded in the .spr
@@ -56,30 +56,30 @@ heuristic_from_string_map := map[string]rp.Heuristic {
 }
 
 scale_mode_from_string_map := map[string]Spr_Scale_Mode {
-	"nearest"    = .Nearest,
-	"linear"     = .Linear,
-	"pixel-art"  = .Pixel_Art,
+	"nearest"   = .Nearest,
+	"linear"    = .Linear,
+	"pixel-art" = .Pixel_Art,
 }
 
 // Atlas / sprite size limits and defaults.
-Min_Atlas_Width        :: 8   // narrowest supported atlas
-Default_Atlas_Width    :: 2048
-Max_Atlas_Width        :: 4096 // widest supported atlas
-Min_Atlas_Height       :: 8
-Default_Atlas_Height   :: 2048
-Max_Atlas_Height       :: 4096
-Min_Auto_Atlas_Size    :: 64 // smallest side --auto-size tries first
-Min_Sprite_Padding     :: 0
-Default_Sprite_Padding :: 0   // gap pixels added around each sprite
-Max_Sprite_Padding     :: 128
+Min_Atlas_Width :: 8 // narrowest supported atlas
+Default_Atlas_Width :: 2048
+Max_Atlas_Width :: 4096 // widest supported atlas
+Min_Atlas_Height :: 8
+Default_Atlas_Height :: 2048
+Max_Atlas_Height :: 4096
+Min_Auto_Atlas_Size :: 64 // smallest side --auto-size tries first
+Min_Sprite_Padding :: 0
+Default_Sprite_Padding :: 0 // gap pixels added around each sprite
+Max_Sprite_Padding :: 128
 
 // Output-generation defaults.
-Default_Map_Format      :: "auto"
-Default_Heuristic       :: "bl"
-Default_Scale_Mode      :: "linear"
+Default_Map_Format :: "auto"
+Default_Heuristic :: "bl"
+Default_Scale_Mode :: "linear"
 Default_Map_Enum_Prefix :: "SPRITE_" // prefix for structured-c enum members
-Default_Map_Array_Name  :: "sprites" // array name in C / structured-c output
-Default_Map_Array_Type  :: "SDL_Rect" // element type in structured-c output
+Default_Map_Array_Name :: "sprites" // array name in C / structured-c output
+Default_Map_Array_Type :: "SDL_Rect" // element type in structured-c output
 
 // Pack_Options carries the fully-resolved set of options from the CLI into
 // the packing pipeline. It is the internal, typed form of the user's CLI
@@ -88,20 +88,20 @@ Pack_Options :: struct {
 	dir:             string, // directory to scan recursively for sprites
 	atlas_path:      string, // output atlas image path (.png)
 	sprite_map_path: string, // output sprite map path
-	atlas_width:     int,    // atlas width in pixels (ignored when auto_size is set)
-	atlas_height:    int,    // atlas height in pixels (ignored when auto_size is set)
-	auto_size:       bool,   // compute the smallest power-of-two atlas that fits all sprites
+	atlas_width:     int, // atlas width in pixels (ignored when auto_size is set)
+	atlas_height:    int, // atlas height in pixels (ignored when auto_size is set)
+	auto_size:       bool, // compute the smallest power-of-two atlas that fits all sprites
 	spr_root:        string, // project root: spr hashes paths relative to this ("" = use the path as discovered)
 	spr_scale_mode:  Spr_Scale_Mode, // filtering mode written to the spr header
-	sprite_padding:  int,    // padding between sprites
+	sprite_padding:  int, // padding between sprites
 	heuristic:       rp.Heuristic, // packing heuristic (bl / bf)
-	sort:            bool,   // sort sprites largest-first before packing
+	sort:            bool, // sort sprites largest-first before packing
 	map_format:      Map_Format, // sprite map output format
 	map_enum_prefix: string, // enum prefix for structured-c
 	map_array_name:  string, // array name for c / structured-c
 	map_array_type:  string, // element type for structured-c
-	no_overwrite:    bool,   // refuse to overwrite existing outputs
-	incremental:     bool,   // skip the build when the outputs are newer than all sources
+	no_overwrite:    bool, // refuse to overwrite existing outputs
+	incremental:     bool, // skip the build when the outputs are newer than all sources
 }
 
 // valid_map_format_strings returns the sorted list of accepted CLI strings
