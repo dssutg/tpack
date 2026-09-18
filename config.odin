@@ -9,8 +9,8 @@ package main
 
 import "core:strings"
 
-import rp "../dssodinlib/rect_pack"
-import u "../dssodinlib/utils"
+import rp "vendor:dss/rect_pack"
+import u "vendor:dss/utils"
 
 // Map_Format enumerates the supported sprite-map output formats.
 Map_Format :: enum {

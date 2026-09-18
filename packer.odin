@@ -1,6 +1,6 @@
 // packer.odin - Skyline rectangle packing and pixel compositing.
 //
-// Wraps the external rect_pack library (../dssodinlib/rect_pack) to lay out
+// Wraps the external rect_pack library (vendor:dss/rect_pack) to lay out
 // sprites into the atlas bin, then blits each sprite's pixels into an SDL
 // atlas surface.
 
@@ -10,7 +10,7 @@ import "core:c"
 import "core:fmt"
 import "core:mem"
 
-import rp "../dssodinlib/rect_pack"
+import rp "vendor:dss/rect_pack"
 import sdl "vendor:sdl2"
 
 // pack_sprites_skyline lays the given sprites out in a width x height bin

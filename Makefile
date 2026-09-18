@@ -3,13 +3,15 @@
 # Default odin toolchain is resolved from PATH. Override with `make ODIN=/path/to/odin`.
 
 ODIN ?= odin
+ODIN_ROOT := $(shell $(ODIN) root)
 
 BIN      := tpack
 # All package files; incremental.odin guard so edits trigger a rebuild too.
 SRC      := main.odin config.odin atlas.odin sprites.odin packer.odin sprite_map.odin util.odin incremental.odin
 # External deps used by the packer: rect_pack plus the whole utils package
-# (config/sprite_map/sprites import it). Wildcard catches any change in it.
-UTILS_SRC := $(wildcard ../dssodinlib/utils/*.odin)
+# (config/sprite_map/sprites import it via the `dss` vendor collection).
+# Wildcard catches any change in it.
+UTILS_SRC := $(wildcard $(ODIN_ROOT)/vendor/dss/utils/*.odin)
 
 .PHONY: all build vet test harness clean install
 
@@ -18,7 +20,7 @@ all: build
 ## build - Compile the tpack binary (default -o:minimal).
 build: $(BIN)
 
-$(BIN): $(SRC) ../dssodinlib/rect_pack/rect_pack.odin $(UTILS_SRC)
+$(BIN): $(SRC) $(ODIN_ROOT)/vendor/dss/rect_pack/rect_pack.odin $(UTILS_SRC)
 	$(ODIN) build .
 
 ## vet - Compile with -vet (unused/shadowing/type checks).

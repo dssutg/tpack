@@ -12,7 +12,7 @@ make build / vet / harness / clean   # Makefile targets available
 
 ## External Dependency
 
-Imports `../dssodinlib/rect_pack` (relative path). Must exist at that sibling path or build will fail. That package is an external skyline rect packer; do not inline or vendor it here.
+Imports `vendor:dss/rect_pack` (Odin `vendor:` collection). Must exist at `<odin root>/vendor/dss/rect_pack` (e.g. a `dssodinlib` checkout symlinked at `<odin root>/vendor/dss`) or the build will fail. That package is an external skyline rect packer; do not inline or vendor it here.
 
 ## Test Harness
 

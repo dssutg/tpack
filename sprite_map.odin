@@ -16,7 +16,7 @@ import "core:strings"
 import "core:unicode"
 import "core:unicode/utf8"
 
-import u "../dssodinlib/utils"
+import u "vendor:dss/utils"
 
 // Generated-file banner. Every format that emits source code starts with a
 // comment warning that the file is generated, so it is not hand-edited.

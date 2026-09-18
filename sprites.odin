@@ -16,7 +16,7 @@ import "core:strings"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 
-import u "../dssodinlib/utils"
+import u "vendor:dss/utils"
 
 // Sprite is a single image that will be packed into the atlas.
 //

@@ -5,7 +5,7 @@ A texture packing CLI written in [Odin](https://odin-lang.org). Packs `.png` spr
 ## Features
 
 - Recursively discovers PNG sprites in a directory (deterministic, sorted order).
-- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from `dssodinlib/rect_pack`.
+- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from `vendor:dss/rect_pack`.
 - Configurable per-sprite padding to prevent edge bleeding.
 - Outputs the atlas as a PNG plus a sprite map in one of several formats (C, JSON, SSM, binary SPR).
 - No-overwrite guard and progress reporting to stderr.
@@ -14,7 +14,7 @@ A texture packing CLI written in [Odin](https://odin-lang.org). Packs `.png` spr
 
 - [Odin](https://odin-lang.org/docs/install/) (a recent nightly; tested with `dev-2026-08`).
 - SDL2 development libraries (used via `vendor:sdl2` and `vendor:sdl2/image` for image loading/encoding).
-- The sibling package `../dssodinlib/rect_pack` (a skyline rect packer). This is a relative-path import, so it must exist at `../dssodinlib/rect_pack` relative to this repository, otherwise the build fails.
+- The `dss` vendor collection (`vendor:dss/rect_pack`, a skyline rect packer). This is an Odin `vendor:`-collection import, so the `dss` package must exist in the compiler's vendor directory (e.g. a `dssodinlib` checkout symlinked at `<odin root>/vendor/dss`), otherwise the build fails.
 
 ## Build and Run
 
@@ -33,31 +33,31 @@ tpack [options] <sprites_dir> <atlas_path> <sprite_map_path>
 
 Arguments:
 
-| Argument | Description |
-|----------|-------------|
-| `sprites_dir`      | Directory to scan recursively for `.png` sprites |
-| `atlas_path`       | Output atlas image path (PNG) |
-| `sprite_map_path`  | Output sprite map path |
+| Argument          | Description                                      |
+|-------------------|--------------------------------------------------|
+| `sprites_dir`     | Directory to scan recursively for `.png` sprites |
+| `atlas_path`      | Output atlas image path (PNG)                    |
+| `sprite_map_path` | Output sprite map path                           |
 
 Options:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--width <n>`           | `2048`  | Atlas width (8–4096; ignored with `--auto-size`) |
-| `--height <n>`          | `2048`  | Atlas height (8–4096; ignored with `--auto-size`) |
-| `--auto-size`           | `on`    | Pick the smallest square power-of-two atlas that fits all sprites (default) |
-| `--no-auto-size`        |         | Use the explicit/default `--width`/`--height` instead of auto-sizing |
-| `--spr-root <dir>`      |         | Project root: `spr` hash paths relative to this directory |
-| `--sprite-padding <n>`  | `0`     | Padding pixels around each sprite (0–128) |
-| `--heuristic <h>`       | `bl`    | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter) |
-| `--no-sort`             |         | Disable largest-first pre-sorting |
-| `--map-format <f>`      | `auto`  | Sprite map format: `auto`, `c`, `structured-c`, `json`, `ssm`, `spr` |
-| `--map-enum-prefix <p>` | `SPRITE_` | Enum prefix for `structured-c` output |
-| `--map-array-name <n>`  | `sprites` | Array name for `c` / `structured-c` output |
-| `--map-array-type <t>`  | `SDL_Rect` | Element type for `structured-c` output |
-| `--no-overwrite`        |         | Refuse to overwrite existing output files |
-| `--incremental`         |         | Skip the rebuild when the atlas and sprite map are newer than every source sprite |
-| `-h`, `-help`           |         | Show help |
+| Flag                    | Default    | Description                                                                       |
+|-------------------------|------------|-----------------------------------------------------------------------------------|
+| `--width <n>`           | `2048`     | Atlas width (8–4096; ignored with `--auto-size`)                                  |
+| `--height <n>`          | `2048`     | Atlas height (8–4096; ignored with `--auto-size`)                                 |
+| `--auto-size`           | `on`       | Pick the smallest square power-of-two atlas that fits all sprites (default)       |
+| `--no-auto-size`        |            | Use the explicit/default `--width`/`--height` instead of auto-sizing              |
+| `--spr-root <dir>`      |            | Project root: `spr` hash paths relative to this directory                         |
+| `--sprite-padding <n>`  | `0`        | Padding pixels around each sprite (0–128)                                         |
+| `--heuristic <h>`       | `bl`       | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter)           |
+| `--no-sort`             |            | Disable largest-first pre-sorting                                                 |
+| `--map-format <f>`      | `auto`     | Sprite map format: `auto`, `c`, `structured-c`, `json`, `ssm`, `spr`              |
+| `--map-enum-prefix <p>` | `SPRITE_`  | Enum prefix for `structured-c` output                                             |
+| `--map-array-name <n>`  | `sprites`  | Array name for `c` / `structured-c` output                                        |
+| `--map-array-type <t>`  | `SDL_Rect` | Element type for `structured-c` output                                            |
+| `--no-overwrite`        |            | Refuse to overwrite existing output files                                         |
+| `--incremental`         |            | Skip the rebuild when the atlas and sprite map are newer than every source sprite |
+| `-h`, `-help`           |            | Show help                                                                         |
 
 The sprite map format is inferred from the output file extension when `--map-format auto` (the default): `.json`, `.ssm`, `.c`, and `.spr` are recognized; `structured-c` requires the explicit flag.
 
@@ -121,16 +121,16 @@ This regenerates `test/textures/sprites.png` and `test/textures/sprites.c`. Refe
 
 All source is a single Odin package (`main`) split across files by concern:
 
-| File | Responsibility |
-|------|----------------|
-| `main.odin`      | CLI parsing + entry point |
-| `config.odin`    | constants, enums, option structs |
-| `atlas.odin`     | packing orchestration + atlas PNG output |
-| `sprites.odin`   | sprite discovery + decoding |
-| `packer.odin`    | skyline rect packing + pixel compositing |
-| `sprite_map.odin`| sprite map output writers (C/JSON/SSM/SPR) |
-| `incremental.odin`| mtime-based output staleness check for `--incremental` |
-| `util.odin`      | shared helpers (escaping, identifier checks) |
+| File               | Responsibility                                         |
+|--------------------|--------------------------------------------------------|
+| `main.odin`        | CLI parsing + entry point                              |
+| `config.odin`      | constants, enums, option structs                       |
+| `atlas.odin`       | packing orchestration + atlas PNG output               |
+| `sprites.odin`     | sprite discovery + decoding                            |
+| `packer.odin`      | skyline rect packing + pixel compositing               |
+| `sprite_map.odin`  | sprite map output writers (C/JSON/SSM/SPR)             |
+| `incremental.odin` | mtime-based output staleness check for `--incremental` |
+| `util.odin`        | shared helpers (escaping, identifier checks)           |
 
 ## License
 
