@@ -8,6 +8,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
+use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
+
 use crate::atlas::Error;
 use crate::config::{ext_to_map_format, Map_Format, Spr_Scale_Mode};
 use crate::sprites::Sprite;
@@ -286,27 +288,74 @@ const Spr_Magic: [u8; 4] = *b"SPRS";
 // Spr_Version is the current .spr format version.
 const Spr_Version: u32 = 1;
 
-// The .spr header (see docs/spr-format-spec.md) is a fixed 16-byte layout.
-// The little-endian field types fix the byte layout; sprite_count is aligned
-// to offset 12, leaving 3 implicit padding bytes after scale_mode.
-const SPR_HEADER_SIZE: usize = 16;
-const SPR_HASH_SIZE: usize = 4;
-const SPR_CROP_SIZE: usize = 8;
-
-// spr_crop holds one 8-byte little-endian content rectangle (no padding).
+// Spr_Header is the declarative on-disk header layout. Field order and types
+// define the byte layout; multi-byte values are stored little-endian. The
+// explicit padding field keeps the struct free of implicit padding, so it can
+// be serialized directly with bytemuck.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct spr_crop {
-    x: u16,
-    y: u16,
-    w: u16,
-    h: u16,
+struct Spr_Header {
+    magic: [u8; 4],
+    version: [u8; 4],
+    scale_mode: u8,
+    padding: [u8; 3],
+    sprite_count: [u8; 4],
 }
+
+// Packed_Sprite_Crop is the declarative on-disk crop layout: four little-
+// endian u16 values, in x/y/w/h order, with no padding.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct Packed_Sprite_Crop {
+    x: [u8; 2],
+    y: [u8; 2],
+    w: [u8; 2],
+    h: [u8; 2],
+}
+
+// bytemuck safety: both structs are repr(C), contain only byte arrays, and
+// have no padding or invalid bit patterns.
+unsafe impl Zeroable for Spr_Header {}
+unsafe impl Pod for Spr_Header {}
+unsafe impl Zeroable for Packed_Sprite_Crop {}
+unsafe impl Pod for Packed_Sprite_Crop {}
+
+impl Spr_Header {
+    fn new(scale_mode: u8, sprite_count: u32) -> Self {
+        Spr_Header {
+            magic: Spr_Magic,
+            version: Spr_Version.to_le_bytes(),
+            scale_mode,
+            padding: [0; 3],
+            sprite_count: sprite_count.to_le_bytes(),
+        }
+    }
+}
+
+impl Packed_Sprite_Crop {
+    fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Packed_Sprite_Crop {
+            x: (x.clamp(0, 0xFFFF) as u16).to_le_bytes(),
+            y: (y.clamp(0, 0xFFFF) as u16).to_le_bytes(),
+            w: (w.clamp(0, 0xFFFF) as u16).to_le_bytes(),
+            h: (h.clamp(0, 0xFFFF) as u16).to_le_bytes(),
+        }
+    }
+}
+
+const SPR_HEADER_SIZE: usize = std::mem::size_of::<Spr_Header>();
+const SPR_HASH_SIZE: usize = std::mem::size_of::<u32>();
+const SPR_CROP_SIZE: usize = std::mem::size_of::<Packed_Sprite_Crop>();
+
+// The on-disk layout requires exactly these sizes (see docs/spr-format-spec.md).
+const _: () = assert!(SPR_HEADER_SIZE == 16);
+const _: () = assert!(SPR_CROP_SIZE == 8);
 
 // spr_entry pairs a sprite's FNV-1a path hash with its crop, for sorting.
 #[derive(Clone, Copy, Debug, Default)]
 struct spr_entry {
     hash: u32,
-    crop: spr_crop,
+    crop: Packed_Sprite_Crop,
 }
 
 // spr_rel_path returns the path string to hash for a sprite. When spr_root is
@@ -350,43 +399,30 @@ fn write_spr_sprite_map(
         let rel = spr_rel_path(&s.image_path, spr_root);
         entries.push(spr_entry {
             hash: fnv32a(rel.as_bytes()),
-            crop: spr_crop {
-                x: s.offset.0.clamp(0, 0xFFFF) as u16,
-                y: s.offset.1.clamp(0, 0xFFFF) as u16,
-                w: (s.surface.width as i32).clamp(0, 0xFFFF) as u16,
-                h: (s.surface.height as i32).clamp(0, 0xFFFF) as u16,
-            },
+            crop: Packed_Sprite_Crop::new(
+                s.offset.0,
+                s.offset.1,
+                s.surface.width as i32,
+                s.surface.height as i32,
+            ),
         });
     }
 
     // Sort ascending so lookups can use binary search at runtime.
     entries.sort_by_key(|a| a.hash);
 
-    // Stage the whole file in memory: header, then hashes, then crops.
+    // Stage the whole file in memory: header, then hashes, then crops. The
+    // structs above define each field's position, so this code never spells
+    // out byte offsets; bytemuck serializes the declarations directly.
+    let header = Spr_Header::new(scale_mode as u8, count as u32);
     let data_len = SPR_HEADER_SIZE + count * (SPR_HASH_SIZE + SPR_CROP_SIZE);
-    let mut data = vec![0u8; data_len];
-
-    // Write the header directly into the buffer, field by field. The zeroed
-    // buffer and per-field writes never touch the header's implicit padding
-    // (bytes 9..11, after scale_mode), so it stays zero - no hardcoded byte
-    // offsets, and the .spr output is byte-deterministic across runs.
-    data[0..4].copy_from_slice(&Spr_Magic);
-    data[4..8].copy_from_slice(&Spr_Version.to_le_bytes());
-    data[8] = scale_mode as u8;
-    // data[9..12] stays zero (implicit alignment padding).
-    data[12..16].copy_from_slice(&(count as u32).to_le_bytes());
-
-    let hashes_start = SPR_HEADER_SIZE;
-    let crops_start = SPR_HEADER_SIZE + count * SPR_HASH_SIZE;
-    for (i, e) in entries.iter().enumerate() {
-        let ho = hashes_start + i * SPR_HASH_SIZE;
-        data[ho..ho + SPR_HASH_SIZE].copy_from_slice(&e.hash.to_le_bytes());
-        let co = crops_start + i * SPR_CROP_SIZE;
-        data[co..co + 2].copy_from_slice(&e.crop.x.to_le_bytes());
-        data[co + 2..co + 4].copy_from_slice(&e.crop.y.to_le_bytes());
-        data[co + 4..co + 6].copy_from_slice(&e.crop.w.to_le_bytes());
-        data[co + 6..co + 8].copy_from_slice(&e.crop.h.to_le_bytes());
+    let mut data = Vec::with_capacity(data_len);
+    data.extend_from_slice(bytes_of(&header));
+    for e in &entries {
+        data.extend_from_slice(&e.hash.to_le_bytes());
     }
+    let crops: Vec<Packed_Sprite_Crop> = entries.iter().map(|e| e.crop).collect();
+    data.extend_from_slice(cast_slice(&crops));
 
     match handle.write(&data) {
         Ok(n) if n == data.len() => Ok(()),

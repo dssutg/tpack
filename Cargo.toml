@@ -10,6 +10,7 @@ members = ["lib/rect_pack"]
 resolver = "2"
 
 [dependencies]
+bytemuck = "1.25"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rect_pack = { path = "lib/rect_pack" }
 
