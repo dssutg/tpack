@@ -9,7 +9,7 @@
 
 use std::thread;
 
-use rect_pack::{Heuristic, PackingMode};
+use rect_pack::PackingMode;
 
 // Map_Format enumerates the supported sprite-map output formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +50,6 @@ pub const Min_Threads: usize = 1;
 
 // Output-generation defaults.
 pub const Default_Map_Format: &str = "auto";
-pub const Default_Heuristic: &str = "bl";
 pub const Default_Scale_Mode: &str = "linear";
 pub const Default_Map_Enum_Prefix: &str = "SPRITE_"; // prefix for structured-c enum members
 pub const Default_Map_Array_Name: &str = "sprites"; // array name in C / structured-c output
@@ -69,10 +68,12 @@ pub struct Pack_Options {
     pub spr_root: String, // project root: spr hashes paths relative to this ("" = use the path as discovered)
     pub spr_scale_mode: Spr_Scale_Mode, // filtering mode written to the spr header
     pub sprite_padding: i32, // padding between sprites
-    pub heuristic: Heuristic, // packing heuristic (bl / bf)
     pub sort: bool,       // sort sprites largest-first before packing
     pub threads: usize,   // worker threads for decoding and compositing
     pub packing_mode: PackingMode, // packing strategy
+    pub seed: u64,        // seed for genetic algorithm
+    pub genetic_pop: usize,
+    pub genetic_gens: usize,
     pub map_format: Map_Format, // sprite map output format
     pub map_enum_prefix: String, // enum prefix for structured-c
     pub map_array_name: String, // array name for c / structured-c
@@ -106,16 +107,6 @@ pub fn ext_to_map_format(ext: &str) -> Option<Map_Format> {
     }
 }
 
-// heuristic_from_string resolves a CLI heuristic name to a rect_pack
-// Heuristic. Returns None when the name is unknown.
-pub fn heuristic_from_string(s: &str) -> Option<Heuristic> {
-    match s.to_lowercase().as_str() {
-        "bl" => Some(Heuristic::Skyline_default),
-        "bf" => Some(Heuristic::Skyline_BF_sortHeight),
-        _ => None,
-    }
-}
-
 // scale_mode_from_string resolves a CLI scale-mode string to a
 // Spr_Scale_Mode. Returns None when the string is unknown.
 pub fn scale_mode_from_string(s: &str) -> Option<Spr_Scale_Mode> {
@@ -130,7 +121,9 @@ pub fn scale_mode_from_string(s: &str) -> Option<Spr_Scale_Mode> {
 // packing_mode_from_string resolves CLI string to PackingMode.
 pub fn packing_mode_from_string(s: &str) -> Option<PackingMode> {
     match s.to_lowercase().as_str() {
-        "skyline" => Some(PackingMode::Skyline),
+        "skyline" | "skyline-bl" | "bl" | "bottom-left" => Some(PackingMode::Skyline),
+        "skyline-bf" | "bf" | "best-fit" => Some(PackingMode::SkylineBF),
+        "skyline-fast" | "fast" => Some(PackingMode::SkylineFast),
         "guillotine" => Some(PackingMode::Guillotine),
         "maxrects" | "max-rects" => Some(PackingMode::MaxRects),
         "genetic" => Some(PackingMode::Genetic),
@@ -141,7 +134,7 @@ pub fn packing_mode_from_string(s: &str) -> Option<PackingMode> {
 
 // valid_packing_mode_strings returns valid values for help/errors.
 pub fn valid_packing_mode_strings() -> Vec<&'static str> {
-    vec!["best", "genetic", "guillotine", "maxrects", "skyline"]
+    vec!["best", "genetic", "guillotine", "maxrects", "skyline", "skyline-bf", "skyline-fast"]
 }
 
 // default_thread_count returns the number of worker threads used when
@@ -158,14 +151,6 @@ pub fn default_thread_count() -> usize {
 // for the --map-format flag, for use in error / help messages.
 pub fn valid_map_format_strings() -> Vec<&'static str> {
     let mut keys = vec!["auto", "c", "structured-c", "json", "ssm", "spr"];
-    keys.sort();
-    keys
-}
-
-// valid_heuristic_strings returns the sorted list of accepted CLI strings
-// for the --heuristic flag, for use in error / help messages.
-pub fn valid_heuristic_strings() -> Vec<&'static str> {
-    let mut keys = vec!["bl", "bf"];
     keys.sort();
     keys
 }

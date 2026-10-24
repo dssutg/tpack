@@ -28,10 +28,9 @@ use std::process;
 
 use atlas::Error;
 use config::{
-    default_thread_count, heuristic_from_string, map_format_from_string, packing_mode_from_string,
-    scale_mode_from_string, valid_heuristic_strings, valid_map_format_strings,
-    valid_packing_mode_strings, valid_scale_mode_strings,
-    Default_Atlas_Height, Default_Atlas_Width, Default_Heuristic, Default_Map_Array_Name,
+    default_thread_count, map_format_from_string, packing_mode_from_string,
+    scale_mode_from_string, valid_map_format_strings, valid_packing_mode_strings,
+    valid_scale_mode_strings, Default_Atlas_Height, Default_Atlas_Width, Default_Map_Array_Name,
     Default_Map_Array_Type, Default_Map_Enum_Prefix, Default_Map_Format, Default_Scale_Mode,
     Default_Sprite_Padding, Max_Atlas_Height, Max_Atlas_Width, Max_Sprite_Padding, Min_Threads,
     Pack_Options,
@@ -50,10 +49,12 @@ struct Options {
     no_auto_size: bool,      // use explicit/default dimensions instead
     spr_root: String,        // project root for spr path hashing
     sprite_padding: i32,     // gap between sprites
-    heuristic: String,       // bl (bottom-left) or bf (best-fit)
     threads: usize,          // worker threads for decoding/compositing
     packing_mode: String,    // skyline/genetic/best/...
     scale_mode: String,      // nearest, linear, or pixel-art
+    seed: u64,
+    genetic_pop: usize,
+    genetic_gens: usize,
     no_sort: bool,           // disable size pre-sorting
     map_format: String,      // auto/c/structured-c/json/ssm/spr
     map_enum_prefix: String, // enum prefix (structured-c)
@@ -90,10 +91,12 @@ fn run(program: &str, args: &[String]) -> i32 {
         no_auto_size: false,
         spr_root: String::new(),
         sprite_padding: Default_Sprite_Padding,
-        heuristic: Default_Heuristic.to_string(),
         threads: default_thread_count(),
         packing_mode: "skyline".to_string(),
         scale_mode: Default_Scale_Mode.to_string(),
+        seed: 123456789u64,
+        genetic_pop: 40,
+        genetic_gens: 60,
         no_sort: false,
         map_format: Default_Map_Format.to_string(),
         map_enum_prefix: Default_Map_Enum_Prefix.to_string(),
@@ -141,16 +144,6 @@ fn run(program: &str, args: &[String]) -> i32 {
         None => {
             let valid = valid_map_format_strings().join(", ");
             eprintln!("{}: invalid map format. Valid formats: {}", program, valid);
-            return 2;
-        }
-    };
-
-    // Resolve the heuristic name to a rect_pack heuristic
-    let heuristic = match heuristic_from_string(&opt.heuristic) {
-        Some(h) => h,
-        None => {
-            let valid = valid_heuristic_strings().join(", ");
-            eprintln!("{}: invalid heuristic. Valid: {}", program, valid);
             return 2;
         }
     };
@@ -210,10 +203,12 @@ fn run(program: &str, args: &[String]) -> i32 {
         spr_root: opt.spr_root,
         spr_scale_mode: scale_mode,
         sprite_padding: opt.sprite_padding,
-        heuristic,
         sort: !opt.no_sort,
         threads: opt.threads,
         packing_mode,
+        seed: opt.seed,
+        genetic_pop: opt.genetic_pop,
+        genetic_gens: opt.genetic_gens,
         map_format,
         map_enum_prefix: opt.map_enum_prefix,
         map_array_name: opt.map_array_name,
@@ -286,7 +281,6 @@ fn parse_args(opt: &mut Options, args: &[String]) -> Result<(), CliError> {
                 "no-auto-size" => opt.no_auto_size = true,
                 "spr-root" => opt.spr_root = next_value(&mut i)?,
                 "sprite-padding" => opt.sprite_padding = parse_i32(next_value(&mut i)?)?,
-                "heuristic" => opt.heuristic = next_value(&mut i)?,
                 "threads" => {
                     let value = next_value(&mut i)?;
                     let threads = value.parse::<usize>().map_err(|_| {
@@ -299,8 +293,20 @@ fn parse_args(opt: &mut Options, args: &[String]) -> Result<(), CliError> {
                     }
                     opt.threads = threads;
                 }
-                "packing-mode" | "algorithm" => {
+                "packing-mode" | "algorithm" | "pack-algorithm" => {
                     opt.packing_mode = next_value(&mut i)?;
+                }
+                "seed" => {
+                    let v = next_value(&mut i)?;
+                    opt.seed = v.parse::<u64>().map_err(|_| CliError::Message(format!("invalid value for --seed: {v}")))?;
+                }
+                "genetic-pop" => {
+                    let v = next_value(&mut i)?;
+                    opt.genetic_pop = v.parse::<usize>().map_err(|_| CliError::Message(format!("invalid value for --genetic-pop: {v}")))?;
+                }
+                "genetic-gens" => {
+                    let v = next_value(&mut i)?;
+                    opt.genetic_gens = v.parse::<usize>().map_err(|_| CliError::Message(format!("invalid value for --genetic-gens: {v}")))?;
                 }
                 "scale-mode" => opt.scale_mode = next_value(&mut i)?,
                 "no-sort" => opt.no_sort = true,
@@ -367,12 +373,12 @@ fn usage(program: &str) {
         "  --sprite-padding <n>   Padding between sprites (default: {Default_Sprite_Padding}, max: {Max_Sprite_Padding})"
     );
     eprintln!(
-        "  --heuristic <h>        Packing heuristic: bl (bottom-left) or bf (best-fit) (default: {Default_Heuristic})"
-    );
-    eprintln!(
         "  --threads <n>          Worker threads for decoding/compositing (default: all cores, min: {Min_Threads})"
     );
-    eprintln!("  --packing-mode <m>     Packing strategy: skyline, genetic, maxrects, guillotine, best (default: skyline)");
+    eprintln!("  --packing-mode <m>     Packing algorithm: skyline, skyline-bf, skyline-fast, genetic, maxrects, guillotine, best (default: skyline)");
+    eprintln!("  --seed <n>             Seed for genetic algorithm (default: 123456789)");
+    eprintln!("  --genetic-pop <n>      Genetic population size (default: 40)");
+    eprintln!("  --genetic-gens <n>     Genetic generations (default: 60)");
     eprintln!(
         "  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: {Default_Scale_Mode})"
     );

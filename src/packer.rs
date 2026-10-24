@@ -19,14 +19,18 @@ use crate::sprites::{Sprite, Surface};
 //
 // The request Vec is owned by this function and released when it goes out of
 // scope; rect_pack owns its internal scratch as well.
+#[allow(clippy::too_many_arguments)]
 pub fn pack_sprites_skyline(
     sprites: &mut [Sprite],
     atlas_width: i32,
     atlas_height: i32,
     padding: i32,
-    heuristic: rp::Heuristic,
+    _heuristic: rp::Heuristic,
     should_sort: bool,
     packing_mode: rp::PackingMode,
+    seed: u64,
+    genetic_pop: usize,
+    genetic_gens: usize,
 ) -> usize {
     // Build the request list
     let requests: Vec<rp::Request> = sprites
@@ -38,9 +42,15 @@ pub fn pack_sprites_skyline(
         .collect();
 
     let results = match packing_mode {
-        rp::PackingMode::Skyline => {
+        rp::PackingMode::Skyline | rp::PackingMode::SkylineFast => {
             let mut packer = rp::Packer::default();
-            packer.init(atlas_width, atlas_height, sprites.len() as i32, heuristic);
+            packer.init(atlas_width, atlas_height, sprites.len() as i32, rp::Heuristic::Skyline_default);
+            let (results, _) = packer.pack(&requests, padding, true);
+            results
+        }
+        rp::PackingMode::SkylineBF => {
+            let mut packer = rp::Packer::default();
+            packer.init(atlas_width, atlas_height, sprites.len() as i32, rp::Heuristic::Skyline_BF_sortHeight);
             let (results, _) = packer.pack(&requests, padding, should_sort);
             results
         }
@@ -62,7 +72,7 @@ pub fn pack_sprites_skyline(
             results
         }
         rp::PackingMode::Genetic => {
-            let (results, _) = rp::genetic::pack_genetic(&requests, atlas_width, atlas_height, padding);
+            let (results, _) = rp::genetic::pack_genetic_with_seed(&requests, atlas_width, atlas_height, padding, seed, genetic_pop, genetic_gens);
             results
         }
         rp::PackingMode::Best => {

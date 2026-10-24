@@ -61,7 +61,7 @@ pub fn pack_maxrects(requests: &[Request], width: i32, height: i32, padding: i32
             free.remove(bi);
             // add splits
             if fr.w - w > 0 {
-                free.push(FreeRect { x: fr.x + w, y: fr.y, w: fr.w - w, h: h });
+                free.push(FreeRect { x: fr.x + w, y: fr.y, w: fr.w - w, h });
                 free.push(FreeRect { x: fr.x + w, y: fr.y + h, w: fr.w - w, h: fr.h - h });
             }
             if fr.h - h > 0 {

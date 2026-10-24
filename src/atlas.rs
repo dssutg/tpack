@@ -123,9 +123,12 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
                 size,
                 size,
                 opt.sprite_padding,
-                opt.heuristic,
+                rect_pack::Heuristic::Skyline_default,
                 opt.sort,
                 opt.packing_mode,
+                opt.seed,
+                opt.genetic_pop,
+                opt.genetic_gens,
             );
             if packed == sprites.len() {
                 break;
@@ -144,9 +147,12 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
             width,
             height,
             opt.sprite_padding,
-            opt.heuristic,
+            rect_pack::Heuristic::Skyline_default,
             opt.sort,
             opt.packing_mode,
+            opt.seed,
+            opt.genetic_pop,
+            opt.genetic_gens,
         );
         if packed != sprites.len() {
             // Not everything fit. The caller reports the failures.

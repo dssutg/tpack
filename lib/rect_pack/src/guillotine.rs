@@ -11,8 +11,6 @@ struct Node {
     w: i32,
     h: i32,
     used: bool,
-    right: i32,
-    down: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -39,14 +37,14 @@ pub fn pack_guillotine(requests: &[(i32, i32)], width: i32, height: i32, padding
         return results;
     }
 
+    let width_ = width;
+    let height_ = height;
     let mut free: Vec<Node> = vec![Node {
         x: 0,
         y: 0,
-        w: width,
-        h: height,
+        w: width_,
+        h: height_,
         used: false,
-        right: -1,
-        down: -1,
     }];
 
     // try largest first by area
@@ -84,10 +82,10 @@ pub fn pack_guillotine(requests: &[(i32, i32)], width: i32, height: i32, padding
             let free_w = free[ni].w - w;
             let free_h = free[ni].h - h;
             if free_w > 0 {
-                free.push(Node { x: fx + w, y: fy, w: free_w, h: free[ni].h, used: false, right: -1, down: -1 });
+                free.push(Node { x: fx + w, y: fy, w: free_w, h: free[ni].h, used: false });
             }
             if free_h > 0 {
-                free.push(Node { x: fx, y: fy + h, w: w, h: free_h, used: false, right: -1, down: -1 });
+                free.push(Node { x: fx, y: fy + h, w, h: free_h, used: false });
             }
         }
     }

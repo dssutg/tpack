@@ -790,51 +790,43 @@ struct Tagged {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PackingMode {
     Skyline,
+    SkylineBF,
+    SkylineFast,
     Guillotine,
     MaxRects,
     Genetic,
     Best,
 }
 
-/// pack_best tries multiple algorithms in order of speed/likelihood and picks
-/// the one that packs the most rectangles; if all pack all rectangles, returns
-/// that result.
+/// pack_best tries multiple algorithms in order: fastest skyline, then
+/// slower skyline variants, then genetic.
+#[allow(unused_assignments)]
 pub fn pack_best(requests: &[Request], width: i32, height: i32, padding: i32) -> (Vec<Result>, bool) {
     let mut best_res: Vec<Result> = vec![Result::default(); requests.len()];
     let mut best_count: i32 = -1;
     let mut best_all: bool = false;
 
-    // 1) try fastest skyline variants
-    let (r1, a1) = skyline_alt::pack_skyline_multi(requests, width, height, padding);
-    let c1 = r1.iter().filter(|x| x.was_packed).count() as i32;
-    if c1 > best_count { best_count = c1; best_all = a1; best_res = r1.clone(); }
-    if best_all { return (best_res, true); }
-
-    // 2) maxrects
-    let (r2, a2) = maxrects::pack_maxrects(requests, width, height, padding);
-    let c2 = r2.iter().filter(|x| x.was_packed).count() as i32;
-    if c2 > best_count { best_count = c2; best_all = a2; best_res = r2; }
-    if best_all { return (best_res, true); }
-
-    // 3) guillotine
-    let greqs: Vec<(i32,i32)> = requests.iter().map(|r| (r.w,r.h)).collect();
-    let g = guillotine::pack_guillotine(&greqs, width, height, padding);
-    let mut r3 = vec![Result::default(); requests.len()];
-    for i in 0..requests.len() {
-        r3[i].w = g[i].w;
-        r3[i].h = g[i].h;
-        r3[i].x = g[i].x;
-        r3[i].y = g[i].y;
-        r3[i].was_packed = g[i].packed;
+    // fastest skyline
+    {
+        let mut packer = Packer::default();
+        packer.init(width, height, requests.len() as i32, Heuristic::Skyline_default);
+        let (r, a) = packer.pack(requests, padding, true);
+        let c = r.iter().filter(|x| x.was_packed).count() as i32;
+        if c > best_count { best_count = c; best_all = a; best_res = r.clone(); }
+        if best_all { return (best_res, true); }
     }
-    let c3 = r3.iter().filter(|x| x.was_packed).count() as i32;
-    let a3 = c3 == requests.len() as i32;
-    if c3 > best_count { best_count = c3; best_all = a3; best_res = r3; }
-    if best_all { return (best_res, true); }
-
-    // 4) genetic (slower) for maximum packing
-    let (r4, a4) = genetic::pack_genetic(requests, width, height, padding);
-    let c4 = r4.iter().filter(|x| x.was_packed).count() as i32;
-    if c4 > best_count { best_count = c4; best_all = a4; best_res = r4; }
+    // slower skyline variants
+    {
+        let (r, a) = skyline_alt::pack_skyline_multi(requests, width, height, padding);
+        let c = r.iter().filter(|x| x.was_packed).count() as i32;
+        if c > best_count { best_count = c; best_all = a; best_res = r; }
+        if best_all { return (best_res, true); }
+    }
+    // genetic last
+    {
+        let (r, a) = genetic::pack_genetic(requests, width, height, padding);
+        let c = r.iter().filter(|x| x.was_packed).count() as i32;
+        if c > best_count { best_count = c; best_all = a; best_res = r; }
+    }
     (best_res, best_all)
 }

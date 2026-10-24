@@ -155,7 +155,17 @@ dependencies = [
  "bytemuck",
  "image",
  "rect_pack",
+ "tpack_cli",
+ "tpack_hash",
 ]
+
+[[package]]
+name = "tpack_cli"
+version = "0.1.0"
+
+[[package]]
+name = "tpack_hash"
+version = "0.1.0"
 
 [[package]]
 name = "zlib-rs"
