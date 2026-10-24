@@ -9,6 +9,8 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
+use tpack_hash::fnv32a;
+
 
 use crate::atlas::Error;
 use crate::config::{ext_to_map_format, Map_Format, Spr_Scale_Mode};
@@ -436,15 +438,7 @@ fn write_spr_sprite_map(
     }
 }
 
-// fnv32a computes the 32-bit FNV-1a hash of a byte string.
-fn fnv32a(bytes: &[u8]) -> u32 {
-    let mut hash = 2_166_136_261u32;
-    for &b in bytes {
-        hash ^= b as u32;
-        hash = hash.wrapping_mul(16_777_619);
-    }
-    hash
-}
+
 
 // path_ext returns the extension of path, including its leading dot, or "".
 fn path_ext(path: &str) -> String {

@@ -1,0 +1,6 @@
+[package]
+name = "tpack_hash"
+version = "0.1.0"
+edition = "2021"
+description = "FNV hashing utilities for tpack"
+license = "MIT"
