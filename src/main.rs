@@ -35,39 +35,9 @@ use config::{
     Default_Sprite_Padding, Max_Atlas_Height, Max_Atlas_Width, Max_Sprite_Padding, Min_Threads,
     Pack_Options,
 };
+use tpack_cli::{parse_args as cli_parse_args, Options as CliOptions, DEFAULT_GENETIC_GENS, DEFAULT_GENETIC_POP, DEFAULT_SEED};
 use util::is_valid_c_identifier;
 
-// Options mirrors the CLI: named flags and three positional arguments.
-// Field names mirror the flags (UNIX style: --name value).
-struct Options {
-    dir: String,             // sprites directory
-    atlas_path: String,      // output atlas PNG
-    sprite_map: String,      // output sprite map
-    atlas_width: i32,        // atlas width (0 = unset; overridden by auto-size)
-    atlas_height: i32,       // atlas height (0 = unset; overridden by auto-size)
-    auto_size: bool,         // fit the smallest power-of-two atlas (default)
-    no_auto_size: bool,      // use explicit/default dimensions instead
-    spr_root: String,        // project root for spr path hashing
-    sprite_padding: i32,     // gap between sprites
-    threads: usize,          // worker threads for decoding/compositing
-    packing_mode: String,    // skyline/genetic/best/...
-    scale_mode: String,      // nearest, linear, or pixel-art
-    seed: u64,
-    genetic_pop: usize,
-    genetic_gens: usize,
-    no_sort: bool,           // disable size pre-sorting
-    map_format: String,      // auto/c/structured-c/json/ssm/spr
-    map_enum_prefix: String, // enum prefix (structured-c)
-    map_array_name: String,  // array name (c/structured-c)
-    map_array_type: String,  // array element type (structured-c)
-    no_overwrite: bool,      // refuse to overwrite outputs
-    incremental: bool,       // skip rebuild when outputs are current
-}
-
-enum CliError {
-    Help,
-    Message(String),
-}
 
 // main parses arguments, validates them, runs the packing pipeline, and
 // translates any error into a stderr message and non-zero exit code.
@@ -81,7 +51,7 @@ fn run(program: &str, args: &[String]) -> i32 {
     // Seed defaults; argument parsing overwrites the ones the user supplied.
     // width/height default to 0, meaning "not specified", so that auto-size
     // (the default) is used unless the user supplies explicit dimensions.
-    let mut opt = Options {
+    let mut opt = CliOptions {
         dir: String::new(),
         atlas_path: String::new(),
         sprite_map: String::new(),
@@ -94,9 +64,9 @@ fn run(program: &str, args: &[String]) -> i32 {
         threads: default_thread_count(),
         packing_mode: "skyline".to_string(),
         scale_mode: Default_Scale_Mode.to_string(),
-        seed: 123456789u64,
-        genetic_pop: 40,
-        genetic_gens: 60,
+        seed: DEFAULT_SEED,
+        genetic_pop: DEFAULT_GENETIC_POP,
+        genetic_gens: DEFAULT_GENETIC_GENS,
         no_sort: false,
         map_format: Default_Map_Format.to_string(),
         map_enum_prefix: Default_Map_Enum_Prefix.to_string(),
@@ -106,16 +76,16 @@ fn run(program: &str, args: &[String]) -> i32 {
         incremental: false,
     };
 
-    if let Err(e) = parse_args(&mut opt, args) {
+    if let Err(e) = cli_parse_args(&mut opt, args, Min_Threads) {
         // Each error type is turned into a plain, user-facing message. In
         // particular, raw enum values (flag reasons, OS error codes) are never
         // formatted directly, so the user never sees internal constants.
         match e {
-            CliError::Help => {
+            tpack_cli::CliError::Help => {
                 usage(program);
                 return 0;
             }
-            CliError::Message(message) => {
+            tpack_cli::CliError::Message(message) => {
                 eprintln!("{program}: {message}");
                 return 2;
             }
@@ -248,103 +218,6 @@ fn run(program: &str, args: &[String]) -> i32 {
             1
         }
     }
-}
-
-// parse_args fills opt from the UNIX-style command line. Value flags consume
-// the following argument; boolean flags take none. Exactly three positional
-// arguments are required.
-fn parse_args(opt: &mut Options, args: &[String]) -> Result<(), CliError> {
-    let mut positional: Vec<String> = Vec::with_capacity(3);
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg == "-h" || arg == "-help" {
-            return Err(CliError::Help);
-        }
-
-        if let Some(name) = arg.strip_prefix("--") {
-            let next_value = |i: &mut usize| -> Result<String, CliError> {
-                *i += 1;
-                args.get(*i)
-                    .cloned()
-                    .ok_or_else(|| CliError::Message(format!("missing value for --{name}")))
-            };
-            let parse_i32 = |v: String| -> Result<i32, CliError> {
-                v.parse::<i32>()
-                    .map_err(|_| CliError::Message(format!("invalid value for --{name}: {v}")))
-            };
-
-            match name {
-                "width" => opt.atlas_width = parse_i32(next_value(&mut i)?)?,
-                "height" => opt.atlas_height = parse_i32(next_value(&mut i)?)?,
-                "auto-size" => opt.auto_size = true,
-                "no-auto-size" => opt.no_auto_size = true,
-                "spr-root" => opt.spr_root = next_value(&mut i)?,
-                "sprite-padding" => opt.sprite_padding = parse_i32(next_value(&mut i)?)?,
-                "threads" => {
-                    let value = next_value(&mut i)?;
-                    let threads = value.parse::<usize>().map_err(|_| {
-                        CliError::Message(format!("invalid value for --threads: {value}"))
-                    })?;
-                    if threads < Min_Threads {
-                        return Err(CliError::Message(format!(
-                            "--threads must be at least {Min_Threads}, got {threads}"
-                        )));
-                    }
-                    opt.threads = threads;
-                }
-                "packing-mode" | "algorithm" | "pack-algorithm" => {
-                    opt.packing_mode = next_value(&mut i)?;
-                }
-                "seed" => {
-                    let v = next_value(&mut i)?;
-                    opt.seed = v.parse::<u64>().map_err(|_| CliError::Message(format!("invalid value for --seed: {v}")))?;
-                }
-                "genetic-pop" => {
-                    let v = next_value(&mut i)?;
-                    opt.genetic_pop = v.parse::<usize>().map_err(|_| CliError::Message(format!("invalid value for --genetic-pop: {v}")))?;
-                }
-                "genetic-gens" => {
-                    let v = next_value(&mut i)?;
-                    opt.genetic_gens = v.parse::<usize>().map_err(|_| CliError::Message(format!("invalid value for --genetic-gens: {v}")))?;
-                }
-                "scale-mode" => opt.scale_mode = next_value(&mut i)?,
-                "no-sort" => opt.no_sort = true,
-                "map-format" => opt.map_format = next_value(&mut i)?,
-                "map-enum-prefix" => opt.map_enum_prefix = next_value(&mut i)?,
-                "map-array-name" => opt.map_array_name = next_value(&mut i)?,
-                "map-array-type" => opt.map_array_type = next_value(&mut i)?,
-                "no-overwrite" => opt.no_overwrite = true,
-                "incremental" => opt.incremental = true,
-                _ => {
-                    return Err(CliError::Message(format!("unknown flag: {arg}")));
-                }
-            }
-        } else if arg.starts_with('-') && arg.len() > 1 {
-            return Err(CliError::Message(format!("unknown flag: {arg}")));
-        } else {
-            positional.push(arg.clone());
-        }
-        i += 1;
-    }
-
-    if positional.len() < 3 {
-        return Err(CliError::Message(
-            "expected 3 positional arguments: <sprites_dir> <atlas_path> <sprite_map_path>"
-                .to_string(),
-        ));
-    }
-    if positional.len() > 3 {
-        return Err(CliError::Message(format!(
-            "unexpected argument: {}",
-            positional[3]
-        )));
-    }
-
-    opt.dir = positional[0].clone();
-    opt.atlas_path = positional[1].clone();
-    opt.sprite_map = positional[2].clone();
-    Ok(())
 }
 
 // usage prints the command-line help to stderr. Called for -h/-help and
