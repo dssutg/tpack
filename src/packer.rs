@@ -56,6 +56,50 @@ pub fn pack_sprites_skyline(
     packed
 }
 
+// copy_sprites_to_atlas composites every packed sprite into the atlas.
+//
+// Sprites are independent, so the atlas is divided into horizontal row bands
+// and each band is filled by its own worker thread. Bands never share rows,
+// so a sprite that crosses a band boundary is simply clipped and copied by
+// each band that covers it. The resulting pixels are identical to copying the
+// sprites one at a time.
+pub fn copy_sprites_to_atlas(sprites: &[Sprite], atlas: &mut Surface, threads: usize) {
+    let dst_w = atlas.width as i32;
+    let dst_h = atlas.height as i32;
+    let height = atlas.height as usize;
+    let pitch = atlas.pitch();
+    let workers = threads.max(1).min(height);
+
+    if workers <= 1 {
+        for s in sprites {
+            copy_sprite_to_atlas(&s.surface, atlas, s.offset.0, s.offset.1);
+        }
+        return;
+    }
+
+    let band_rows = height.div_ceil(workers);
+    let band_bytes = band_rows * pitch;
+    let pixels = &mut atlas.pixels;
+    std::thread::scope(|scope| {
+        for (band_index, band) in pixels.chunks_mut(band_bytes).enumerate() {
+            let band_y0 = (band_index * band_rows) as i32;
+            let band_y1 = ((band_index + 1) * band_rows).min(height) as i32;
+            scope.spawn(move || {
+                for s in sprites {
+                    copy_sprite_to_band(
+                        &s.surface,
+                        band,
+                        dst_w,
+                        dst_h,
+                        (band_y0, band_y1),
+                        (s.offset.0, s.offset.1),
+                    );
+                }
+            });
+        }
+    });
+}
+
 // copy_sprite_to_atlas composits the (src) sprite surface into the (dst)
 // atlas at pixel offset (ox, oy).
 //
@@ -72,20 +116,35 @@ pub fn pack_sprites_skyline(
 // written out of bounds (defensive: packing should keep every sprite inside,
 // but a bug in the packer must not corrupt memory).
 pub fn copy_sprite_to_atlas(src: &Surface, dst: &mut Surface, ox: i32, oy: i32) {
-    let src_pitch = src.pitch();
-    let dst_pitch = dst.pitch();
-    let src_pixels = &src.pixels;
-    let dst_pixels = &mut dst.pixels;
-    let w = src.width as i32;
-    let h = src.height as i32;
     let dst_w = dst.width as i32;
     let dst_h = dst.height as i32;
+    copy_sprite_to_band(src, &mut dst.pixels, dst_w, dst_h, (0, dst_h), (ox, oy));
+}
 
-    // Clip the copy region to the intersection of the sprite and the atlas.
+// copy_sprite_to_band writes the portion of src that falls inside the atlas
+// rows [band_y0, band_y1) into dst, whose first byte is that band's first
+// pixel. dst_w and dst_h describe the full atlas, so clipping still happens
+// against the real atlas bounds even though only one band is writable.
+fn copy_sprite_to_band(
+    src: &Surface,
+    dst: &mut [u8],
+    dst_w: i32,
+    dst_h: i32,
+    (band_y0, band_y1): (i32, i32),
+    (ox, oy): (i32, i32),
+) {
+    let src_pitch = src.pitch();
+    let dst_pitch = dst_w as usize * 4;
+    let src_pixels = &src.pixels;
+    let w = src.width as i32;
+    let h = src.height as i32;
+
+    // Clip the copy region to the intersection of the sprite, the atlas, and
+    // this band.
     let sx0 = 0.max(ox);
-    let sy0 = 0.max(oy);
+    let sy0 = 0.max(oy).max(band_y0);
     let sx1 = dst_w.min(ox + w);
-    let sy1 = dst_h.min(oy + h);
+    let sy1 = dst_h.min(oy + h).min(band_y1);
     if sx0 >= sx1 || sy0 >= sy1 {
         return;
     }
@@ -94,20 +153,20 @@ pub fn copy_sprite_to_atlas(src: &Surface, dst: &mut Surface, ox: i32, oy: i32) 
         for x in sx0..sx1 {
             // Source and destination byte offsets (4 bytes per pixel).
             let si = (y - oy) as usize * src_pitch + (x - ox) as usize * 4;
-            let di = y as usize * dst_pitch + x as usize * 4;
+            let di = (y - band_y0) as usize * dst_pitch + x as usize * 4;
             let a = src_pixels[si + 3];
             if a == 0 {
                 // Transparent: clear to transparent black.
-                dst_pixels[di] = 0;
-                dst_pixels[di + 1] = 0;
-                dst_pixels[di + 2] = 0;
-                dst_pixels[di + 3] = 0;
+                dst[di] = 0;
+                dst[di + 1] = 0;
+                dst[di + 2] = 0;
+                dst[di + 3] = 0;
             } else {
                 // Copy the BGRA channels verbatim.
-                dst_pixels[di] = src_pixels[si];
-                dst_pixels[di + 1] = src_pixels[si + 1];
-                dst_pixels[di + 2] = src_pixels[si + 2];
-                dst_pixels[di + 3] = a;
+                dst[di] = src_pixels[si];
+                dst[di + 1] = src_pixels[si + 1];
+                dst[di + 2] = src_pixels[si + 2];
+                dst[di + 3] = a;
             }
         }
     }

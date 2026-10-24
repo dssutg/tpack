@@ -7,6 +7,8 @@
 #![allow(non_upper_case_globals)]
 #![allow(clippy::upper_case_acronyms)]
 
+use std::thread;
+
 use rect_pack::Heuristic;
 
 // Map_Format enumerates the supported sprite-map output formats.
@@ -42,6 +44,10 @@ pub const Min_Sprite_Padding: i32 = 0;
 pub const Default_Sprite_Padding: i32 = 0; // gap pixels added around each sprite
 pub const Max_Sprite_Padding: i32 = 128;
 
+// Threading: --threads must be at least one; the default is every core the
+// OS reports as available for this process.
+pub const Min_Threads: usize = 1;
+
 // Output-generation defaults.
 pub const Default_Map_Format: &str = "auto";
 pub const Default_Heuristic: &str = "bl";
@@ -65,6 +71,7 @@ pub struct Pack_Options {
     pub sprite_padding: i32, // padding between sprites
     pub heuristic: Heuristic, // packing heuristic (bl / bf)
     pub sort: bool,       // sort sprites largest-first before packing
+    pub threads: usize,   // worker threads for decoding and compositing
     pub map_format: Map_Format, // sprite map output format
     pub map_enum_prefix: String, // enum prefix for structured-c
     pub map_array_name: String, // array name for c / structured-c
@@ -117,6 +124,16 @@ pub fn scale_mode_from_string(s: &str) -> Option<Spr_Scale_Mode> {
         "pixel-art" => Some(Spr_Scale_Mode::Pixel_Art),
         _ => None,
     }
+}
+
+// default_thread_count returns the number of worker threads used when
+// --threads is not supplied: all cores available to this process, but never
+// fewer than one.
+pub fn default_thread_count() -> usize {
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(Min_Threads)
+        .max(Min_Threads)
 }
 
 // valid_map_format_strings returns the sorted list of accepted CLI strings

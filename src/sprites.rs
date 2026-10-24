@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::atlas::Error;
+use crate::parallel;
 
 // Surface is the decoded pixel buffer for one image (or the atlas).
 //
@@ -58,13 +59,23 @@ pub struct Sprite {
 // Sprite storage is owned by the returned Vec and released automatically when
 // it is dropped. On error the Vec is empty and a descriptive error is
 // returned.
-pub fn find_and_read_sprites(path: &str, file_ext: &str) -> Result<Vec<Sprite>, Error> {
+pub fn find_and_read_sprites(
+    path: &str,
+    file_ext: &str,
+    threads: usize,
+) -> Result<Vec<Sprite>, Error> {
     let filenames = find_image_files(path, file_ext)
         .map_err(|e| Error::Message(format!("cannot read sprite image files: {e}")))?;
 
+    // Decode in parallel; results stay index-aligned with filenames so the
+    // deterministic sprite order (and therefore atlas layout) is unchanged.
+    let decoded = parallel::map(&filenames, threads, |file_path| {
+        read_sprite_from_file(file_path)
+    });
+
     let mut sprites = Vec::with_capacity(filenames.len());
-    for file_path in filenames {
-        match read_sprite_from_file(&file_path) {
+    for (file_path, result) in filenames.into_iter().zip(decoded) {
+        match result {
             Ok(sprite) => sprites.push(sprite),
             Err(rerr) => {
                 // Surface storage of already-loaded sprites is released when

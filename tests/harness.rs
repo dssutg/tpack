@@ -101,6 +101,62 @@ fn test_cases() -> Vec<Test_Case> {
             verify: None,
         },
         Test_Case {
+            name: "threads 1 (matches default)",
+            args: &[
+                "--threads",
+                "1",
+                "--map-format",
+                "c",
+                "test/sprites",
+                "target/harness_threads1.png",
+                "target/harness_threads1.c",
+            ],
+            outputs: &[
+                Expected_File {
+                    path: "target/harness_threads1.png",
+                    must_contain: "",
+                },
+                Expected_File {
+                    path: "target/harness_threads1.c",
+                    must_contain: "test/sprites/wieldhand.png",
+                },
+            ],
+            expect_exit: 0,
+            setup: None,
+            verify: Some(|| {
+                files_equal("target/harness_threads1.png", "test/textures/harness_c.png")
+                    && files_equal("target/harness_threads1.c", "test/textures/harness_c.c")
+            }),
+        },
+        Test_Case {
+            name: "threads 4 (matches default)",
+            args: &[
+                "--threads",
+                "4",
+                "--map-format",
+                "c",
+                "test/sprites",
+                "target/harness_threads4.png",
+                "target/harness_threads4.c",
+            ],
+            outputs: &[
+                Expected_File {
+                    path: "target/harness_threads4.png",
+                    must_contain: "",
+                },
+                Expected_File {
+                    path: "target/harness_threads4.c",
+                    must_contain: "test/sprites/wieldhand.png",
+                },
+            ],
+            expect_exit: 0,
+            setup: None,
+            verify: Some(|| {
+                files_equal("target/harness_threads4.png", "test/textures/harness_c.png")
+                    && files_equal("target/harness_threads4.c", "test/textures/harness_c.c")
+            }),
+        },
+        Test_Case {
             name: "json map (auto-size)",
             args: &[
                 "--map-format",
@@ -309,6 +365,26 @@ fn test_cases() -> Vec<Test_Case> {
             verify: None,
         },
         Test_Case {
+            name: "negative: zero threads",
+            args: &[
+                "--threads",
+                "0",
+                "test/sprites",
+                "test/textures/harness_threads0.png",
+                "test/textures/harness_threads0.c",
+            ],
+            outputs: &[],
+            expect_exit: 2,
+            setup: Some(|| {
+                let _ = fs::remove_file("test/textures/harness_threads0.png");
+                let _ = fs::remove_file("test/textures/harness_threads0.c");
+            }),
+            verify: Some(|| {
+                !Path::new("test/textures/harness_threads0.png").exists()
+                    && !Path::new("test/textures/harness_threads0.c").exists()
+            }),
+        },
+        Test_Case {
             name: "negative: invalid heuristic",
             args: &[
                 "--heuristic",
@@ -355,6 +431,13 @@ fn test_cases() -> Vec<Test_Case> {
             }),
         },
     ]
+}
+
+fn files_equal(a: &str, b: &str) -> bool {
+    match (fs::read(a), fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn run_test(t: &Test_Case, failures: &mut Vec<String>) -> bool {

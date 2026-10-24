@@ -18,6 +18,7 @@ mod atlas;
 mod config;
 mod incremental;
 mod packer;
+mod parallel;
 mod sprite_map;
 mod sprites;
 mod util;
@@ -27,11 +28,12 @@ use std::process;
 
 use atlas::Error;
 use config::{
-    heuristic_from_string, map_format_from_string, scale_mode_from_string, valid_heuristic_strings,
-    valid_map_format_strings, valid_scale_mode_strings, Default_Atlas_Height, Default_Atlas_Width,
-    Default_Heuristic, Default_Map_Array_Name, Default_Map_Array_Type, Default_Map_Enum_Prefix,
-    Default_Map_Format, Default_Scale_Mode, Default_Sprite_Padding, Max_Atlas_Height,
-    Max_Atlas_Width, Max_Sprite_Padding, Pack_Options,
+    default_thread_count, heuristic_from_string, map_format_from_string, scale_mode_from_string,
+    valid_heuristic_strings, valid_map_format_strings, valid_scale_mode_strings,
+    Default_Atlas_Height, Default_Atlas_Width, Default_Heuristic, Default_Map_Array_Name,
+    Default_Map_Array_Type, Default_Map_Enum_Prefix, Default_Map_Format, Default_Scale_Mode,
+    Default_Sprite_Padding, Max_Atlas_Height, Max_Atlas_Width, Max_Sprite_Padding, Min_Threads,
+    Pack_Options,
 };
 use util::is_valid_c_identifier;
 
@@ -48,6 +50,7 @@ struct Options {
     spr_root: String,        // project root for spr path hashing
     sprite_padding: i32,     // gap between sprites
     heuristic: String,       // bl (bottom-left) or bf (best-fit)
+    threads: usize,          // worker threads for decoding/compositing
     scale_mode: String,      // nearest, linear, or pixel-art
     no_sort: bool,           // disable size pre-sorting
     map_format: String,      // auto/c/structured-c/json/ssm/spr
@@ -86,6 +89,7 @@ fn run(program: &str, args: &[String]) -> i32 {
         spr_root: String::new(),
         sprite_padding: Default_Sprite_Padding,
         heuristic: Default_Heuristic.to_string(),
+        threads: default_thread_count(),
         scale_mode: Default_Scale_Mode.to_string(),
         no_sort: false,
         map_format: Default_Map_Format.to_string(),
@@ -196,6 +200,7 @@ fn run(program: &str, args: &[String]) -> i32 {
         sprite_padding: opt.sprite_padding,
         heuristic,
         sort: !opt.no_sort,
+        threads: opt.threads,
         map_format,
         map_enum_prefix: opt.map_enum_prefix,
         map_array_name: opt.map_array_name,
@@ -269,6 +274,18 @@ fn parse_args(opt: &mut Options, args: &[String]) -> Result<(), CliError> {
                 "spr-root" => opt.spr_root = next_value(&mut i)?,
                 "sprite-padding" => opt.sprite_padding = parse_i32(next_value(&mut i)?)?,
                 "heuristic" => opt.heuristic = next_value(&mut i)?,
+                "threads" => {
+                    let value = next_value(&mut i)?;
+                    let threads = value.parse::<usize>().map_err(|_| {
+                        CliError::Message(format!("invalid value for --threads: {value}"))
+                    })?;
+                    if threads < Min_Threads {
+                        return Err(CliError::Message(format!(
+                            "--threads must be at least {Min_Threads}, got {threads}"
+                        )));
+                    }
+                    opt.threads = threads;
+                }
                 "scale-mode" => opt.scale_mode = next_value(&mut i)?,
                 "no-sort" => opt.no_sort = true,
                 "map-format" => opt.map_format = next_value(&mut i)?,
@@ -335,6 +352,9 @@ fn usage(program: &str) {
     );
     eprintln!(
         "  --heuristic <h>        Packing heuristic: bl (bottom-left) or bf (best-fit) (default: {Default_Heuristic})"
+    );
+    eprintln!(
+        "  --threads <n>          Worker threads for decoding/compositing (default: all cores, min: {Min_Threads})"
     );
     eprintln!(
         "  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: {Default_Scale_Mode})"

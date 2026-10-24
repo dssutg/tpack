@@ -12,7 +12,7 @@ use crate::config::{
     Min_Auto_Atlas_Size, Min_Sprite_Padding, Pack_Options,
 };
 use crate::incremental::outputs_are_current;
-use crate::packer::{copy_sprite_to_atlas, create_atlas_surface, pack_sprites_skyline};
+use crate::packer::{copy_sprites_to_atlas, create_atlas_surface, pack_sprites_skyline};
 use crate::sprite_map::{resolve_map_format, save_atlas_sprite_map};
 use crate::sprites::{find_and_read_sprites, Sprite, Surface};
 
@@ -106,7 +106,7 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
     }
 
     // Load all sprites
-    let mut sprites = find_and_read_sprites(&opt.dir, ".png")?;
+    let mut sprites = find_and_read_sprites(&opt.dir, ".png", opt.threads)?;
     eprintln!("Found {} sprites", sprites.len());
 
     // Resolve the atlas dimensions (explicit or auto-sized)
@@ -168,9 +168,7 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
     // Composite the atlas image
     let mut atlas = create_atlas_surface(width, height)?;
 
-    for s in &sprites {
-        copy_sprite_to_atlas(&s.surface, &mut atlas, s.offset.0, s.offset.1);
-    }
+    copy_sprites_to_atlas(&sprites, &mut atlas, opt.threads);
 
     // Write outputs
     save_texture_atlas(&opt.atlas_path, &atlas)?;

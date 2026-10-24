@@ -8,6 +8,7 @@ A texture packing CLI written in [Rust](https://www.rust-lang.org). Packs `.png`
 - Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from the bundled `lib/rect_pack` crate.
 - Configurable per-sprite padding to prevent edge bleeding.
 - Outputs the atlas as a PNG plus a sprite map in one of several formats (C, JSON, SSM, binary SPR).
+- Parallel sprite decoding and atlas compositing via `--threads` (defaults to every available core); the deterministic skyline placement itself remains sequential.
 - No-overwrite guard and progress reporting to stderr.
 
 ## Requirements
@@ -50,6 +51,7 @@ Options:
 | `--spr-root <dir>`      |            | Project root: `spr` hash paths relative to this directory                         |
 | `--sprite-padding <n>`  | `0`        | Padding pixels around each sprite (0–128)                                         |
 | `--heuristic <h>`       | `bl`       | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter)           |
+| `--threads <n>`         | all cores  | Worker threads for decoding/compositing (minimum: 1)                              |
 | `--scale-mode <m>`      | `linear`   | SPR atlas scale mode: `nearest`, `linear`, or `pixel-art`                         |
 | `--no-sort`             |            | Disable largest-first pre-sorting                                                 |
 | `--map-format <f>`      | `auto`     | Sprite map format: `auto`, `c`, `structured-c`, `json`, `ssm`, `spr`              |
@@ -128,7 +130,8 @@ The tool is a single Rust crate (`tpack`) split across modules by concern, plus 
 | `src/config.rs`     | constants, enums, option structs                       |
 | `src/atlas.rs`      | packing orchestration + atlas PNG output               |
 | `src/sprites.rs`    | sprite discovery + decoding                            |
-| `src/packer.rs`     | skyline rect packing + pixel compositing               |
+| `src/packer.rs`     | skyline rect packing + parallel pixel compositing      |
+| `src/parallel.rs`   | scoped-thread helpers for decoding/compositing         |
 | `src/sprite_map.rs` | sprite map output writers (C/JSON/SSM/SPR)             |
 | `src/incremental.rs`| mtime-based output staleness check for `--incremental` |
 | `src/util.rs`       | shared helpers (escaping, identifier checks)           |
