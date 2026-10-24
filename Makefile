@@ -1,48 +1,38 @@
 # tpack Makefile
 #
-# Default odin toolchain is resolved from PATH. Override with `make ODIN=/path/to/odin`.
+# Default Rust toolchain is resolved from PATH. Override with `make CARGO=/path/to/cargo`.
 
-ODIN ?= odin
-ODIN_ROOT := $(shell $(ODIN) root)
-
-BIN      := tpack
-# All package files; incremental.odin guard so edits trigger a rebuild too.
-SRC      := main.odin config.odin atlas.odin sprites.odin packer.odin sprite_map.odin util.odin incremental.odin
-# External deps used by the packer: rect_pack plus the whole utils package
-# (config/sprite_map/sprites import it via the `dss` vendor collection).
-# Wildcard catches any change in it.
-UTILS_SRC := $(wildcard $(ODIN_ROOT)/vendor/dss/utils/*.odin)
+CARGO ?= cargo
+BIN   := target/release/tpack
 
 .PHONY: all build vet test harness clean install
 
 all: build
 
-## build - Compile the tpack binary (default -o:minimal).
-build: $(BIN)
+## build - Compile the tpack binary (release).
+build:
+	$(CARGO) build --release
 
-$(BIN): $(SRC) $(ODIN_ROOT)/vendor/dss/rect_pack/rect_pack.odin $(UTILS_SRC)
-	$(ODIN) build .
-
-## vet - Compile with -vet (unused/shadowing/type checks).
+## vet - Lint with clippy, denying warnings.
 vet:
-	$(ODIN) build . -vet
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
-## test - Run `odin test` (no unit tests defined; harness covers integration).
+## test - Run the unit and integration test suites.
 test:
-	$(ODIN) test .
+	$(CARGO) test --workspace
 
 ## harness - Run the integration harness (packs test/sprites, writes textures).
 harness:
-	$(ODIN) run test/pack
+	$(CARGO) test --test harness -- --nocapture
 
-## clean - Remove the build artifact.
+## clean - Remove build artifacts.
 clean:
-	rm -f $(BIN)
+	$(CARGO) clean
 
 ## install - Install binary to $(PREFIX)/bin (default /usr/local).
 PREFIX ?= /usr/local
 install: build
-	install -m 0755 $(BIN) $(PREFIX)/bin/$(BIN)
+	install -m 0755 $(BIN) $(PREFIX)/bin/tpack
 
 ## help - Show available targets.
 help:

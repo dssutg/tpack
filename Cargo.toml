@@ -1,0 +1,22 @@
+[package]
+name = "tpack"
+version = "0.1.0"
+edition = "2021"
+description = "Texture packing CLI"
+license = "MIT"
+
+[workspace]
+members = ["lib/rect_pack"]
+resolver = "2"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+rect_pack = { path = "lib/rect_pack" }
+
+[profile.release]
+lto = true
+strip = true
+
+[[test]]
+name = "harness"
+harness = false

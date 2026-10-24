@@ -1,0 +1,8 @@
+[package]
+name = "rect_pack"
+version = "0.1.0"
+edition = "2021"
+description = "Skyline rectangle bin-packer (Rust port of stb_rect_pack.h)"
+license = "MIT"
+
+[dependencies]

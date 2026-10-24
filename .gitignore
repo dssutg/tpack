@@ -1,5 +1,5 @@
-# Build artifact
-/tpack
+# Build artifacts
+target/
 
 # Harness sentinel fixture (rewritten identically on each run)
 /test/textures/harness_auto.dat

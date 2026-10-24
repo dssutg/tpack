@@ -1,26 +1,26 @@
 # tpack
 
-A texture packing CLI written in [Odin](https://odin-lang.org). Packs `.png` sprites from a directory into a single texture atlas image and generates a sprite map describing where each sprite landed (C, JSON, SSM, or binary SPR formats).
+A texture packing CLI written in [Rust](https://www.rust-lang.org). Packs `.png` sprites from a directory into a single texture atlas image and generates a sprite map describing where each sprite landed (C, JSON, SSM, or binary SPR formats).
 
 ## Features
 
 - Recursively discovers PNG sprites in a directory (deterministic, sorted order).
-- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from `vendor:dss/rect_pack`.
+- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from the bundled `lib/rect_pack` crate.
 - Configurable per-sprite padding to prevent edge bleeding.
 - Outputs the atlas as a PNG plus a sprite map in one of several formats (C, JSON, SSM, binary SPR).
 - No-overwrite guard and progress reporting to stderr.
 
 ## Requirements
 
-- [Odin](https://odin-lang.org/docs/install/) (a recent nightly; tested with `dev-2026-08`).
-- SDL2 development libraries (used via `vendor:sdl2` and `vendor:sdl2/image` for image loading/encoding).
-- The `dss` vendor collection (`vendor:dss/rect_pack`, a skyline rect packer). This is an Odin `vendor:`-collection import, so the `dss` package must exist in the compiler's vendor directory (e.g. a `dssodinlib` checkout symlinked at `<odin root>/vendor/dss`), otherwise the build fails.
+- A recent Rust toolchain (tested with Rust 1.99).
+- No system libraries: PNG decoding/encoding uses the pure-Rust `image` crate.
 
 ## Build and Run
 
 ```
-odin build .            # produces ./tpack
-odin run . -- <args>    # build and run in one step
+cargo build            # produces ./target/debug/tpack
+cargo run -- <args>    # build and run in one step
+cargo build --release  # produces ./target/release/tpack
 ```
 
 The binary can also be built and installed with a Makefile (see below).
@@ -50,6 +50,7 @@ Options:
 | `--spr-root <dir>`      |            | Project root: `spr` hash paths relative to this directory                         |
 | `--sprite-padding <n>`  | `0`        | Padding pixels around each sprite (0–128)                                         |
 | `--heuristic <h>`       | `bl`       | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter)           |
+| `--scale-mode <m>`      | `linear`   | SPR atlas scale mode: `nearest`, `linear`, or `pixel-art`                         |
 | `--no-sort`             |            | Disable largest-first pre-sorting                                                 |
 | `--map-format <f>`      | `auto`     | Sprite map format: `auto`, `c`, `structured-c`, `json`, `ssm`, `spr`              |
 | `--map-enum-prefix <p>` | `SPRITE_`  | Enum prefix for `structured-c` output                                             |
@@ -61,7 +62,7 @@ Options:
 
 The sprite map format is inferred from the output file extension when `--map-format auto` (the default): `.json`, `.ssm`, `.c`, and `.spr` are recognized; `structured-c` requires the explicit flag.
 
-Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--height` are explicitly provided, which disables it), the tool ignores `--width`/`--height` and probes increasing square power-of-two sizes (64 → 128 → … up to 4096) until the skyline packer fits every sprite, then uses the smallest size that works. This is handy when the sprite set varies or you always want the tightest GPU-friendly texture. A sprite wider or taller than 4096 (or a set that outgrows 4096×4096) can never fit and is reported as an `Atlas_Too_Small_Error`.
+Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--height` are explicitly provided, which disables it), the tool ignores `--width`/`--height` and probes increasing square power-of-two sizes (64 → 128 → … up to 4096) until the skyline packer fits every sprite, then uses the smallest size that works. This is handy when the sprite set varies or you always want the tightest GPU-friendly texture. A sprite wider or taller than 4096 (or a set that outgrows 4096×4096) can never fit and is reported as an `AtlasTooSmall` error.
 
 ### Sprite map formats
 
@@ -69,7 +70,7 @@ Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--he
 - **SSM**: tab-separated records, one per sprite: `S\t<path>\t<x>\t<y>\t<w>\t<h>`.
 - **C**: a plain C array of `{ filename, x, y, w, h }` entries.
 - **structured-c**: a C header with a generated `enum` of sprite identifiers plus an array indexed by those enum values, guarded by `<prefix>_IMPLEMENTATION` so it can be included for declarations and instantiated in one translation unit.
-- **SPR**: a compact binary atlas sprite map (see `docs/spr-format-spec.md`). Each sprite is identified by the FNV-1a 32-bit hash of its source path, so lookups are `O(log n)` binary searches over the hash array. By default the FULL discovered path is hashed (e.g. `assets/units/christina/0001.png`); pass `--spr-root <dir>` to hash paths relative to a project root instead (e.g. with `--spr-root assets`, `assets/units/christina/0001.png` hashes as `units/christina/0001.png`). The atlas scale mode for SPR is emitted as `Linear`.
+- **SPR**: a compact binary atlas sprite map (see `docs/spr-format-spec.md`). Each sprite is identified by the FNV-1a 32-bit hash of its source path, so lookups are `O(log n)` binary searches over the hash array. By default the FULL discovered path is hashed (e.g. `assets/units/christina/0001.png`); pass `--spr-root <dir>` to hash paths relative to a project root instead (e.g. with `--spr-root assets`, `assets/units/christina/0001.png` hashes as `units/christina/0001.png`). The atlas scale mode for SPR is emitted as the configured `--scale-mode` (linear by default).
 
 ### Incremental builds
 
@@ -97,40 +98,42 @@ Progress and diagnostics are written to stderr so stdout remains clean for scrip
 A Makefile provides common targets:
 
 ```
-make build     # compile ./tpack
-make vet       # build with -vet (unused/shadowing/type checks)
+make build     # compile ./target/release/tpack
+make vet       # run clippy, denying warnings
 make harness   # run the integration harness (pack test/sprites)
-make clean     # remove ./tpack
+make clean     # remove build artifacts
 make install   # install to $(PREFIX)/bin (default /usr/local)
 make help      # list targets
 ```
 
-Override the toolchain with `make ODIN=/path/to/odin`.
+Override the toolchain with `make CARGO=/path/to/cargo`.
 
 ## Testing
 
-There is no Odin unit-test suite (`odin test .` reports "No tests to run"). Integration coverage is provided by `test/pack/pack.odin`, a harness that spawns the tool against the fixtures in `test/sprites/`:
+Unit tests cover the rectangle packer (`lib/rect_pack`); run them with `cargo test --workspace`. Integration coverage is provided by `tests/harness.rs`, a harness that spawns the built tool against the fixtures in `test/sprites/`:
 
 ```
-make harness       # or: odin run test/pack
+make harness       # or: cargo test --test harness -- --nocapture
 ```
 
-This regenerates `test/textures/sprites.png` and `test/textures/sprites.c`. Reference outputs (e.g. `test/textures/parse_json.c`) illustrate how the JSON/SSM maps are consumed.
+This regenerates the harness outputs under `test/textures/`. Reference outputs (e.g. `test/textures/parse_json.c`) illustrate how the JSON/SSM maps are consumed.
 
 ## Repository Layout
 
-All source is a single Odin package (`main`) split across files by concern:
+The tool is a single Rust crate (`tpack`) split across modules by concern, plus the bundled packer crate:
 
-| File               | Responsibility                                         |
-|--------------------|--------------------------------------------------------|
-| `main.odin`        | CLI parsing + entry point                              |
-| `config.odin`      | constants, enums, option structs                       |
-| `atlas.odin`       | packing orchestration + atlas PNG output               |
-| `sprites.odin`     | sprite discovery + decoding                            |
-| `packer.odin`      | skyline rect packing + pixel compositing               |
-| `sprite_map.odin`  | sprite map output writers (C/JSON/SSM/SPR)             |
-| `incremental.odin` | mtime-based output staleness check for `--incremental` |
-| `util.odin`        | shared helpers (escaping, identifier checks)           |
+| File                | Responsibility                                         |
+|---------------------|--------------------------------------------------------|
+| `src/main.rs`       | CLI parsing + entry point                              |
+| `src/config.rs`     | constants, enums, option structs                       |
+| `src/atlas.rs`      | packing orchestration + atlas PNG output               |
+| `src/sprites.rs`    | sprite discovery + decoding                            |
+| `src/packer.rs`     | skyline rect packing + pixel compositing               |
+| `src/sprite_map.rs` | sprite map output writers (C/JSON/SSM/SPR)             |
+| `src/incremental.rs`| mtime-based output staleness check for `--incremental` |
+| `src/util.rs`       | shared helpers (escaping, identifier checks)           |
+| `lib/rect_pack/`    | standalone skyline rectangle packer crate              |
+| `tests/harness.rs`  | process-spawning integration harness                   |
 
 ## License
 

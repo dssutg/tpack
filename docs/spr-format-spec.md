@@ -31,7 +31,7 @@ Offset  Size          Field
       sprite_count × 8   sprite_crops    Packed_Sprite_Crop[sprite_count]
 ```
 
-**Total header size:** 16 bytes (Odin struct packing pads `scale_mode`
+**Total header size:** 16 bytes (three zero bytes pad `scale_mode`
 to 4 bytes so `sprite_count` is naturally aligned).
 
 ## Header — `Sprite_Crop_Bundle_Header` (16 bytes)
@@ -41,7 +41,7 @@ to 4 bytes so `sprite_count` is naturally aligned).
 | 0      | `magic`      | [4]byte | Always `0x53 0x50 0x52 0x53` (`"SPRS"`)     |
 | 4      | `version`    | u32le   | Format version (currently **1**)             |
 | 8      | `scale_mode` | u8      | GPU texture scale mode (see below)           |
-| 9-15   | —            | padding | Implicit 3-byte pad (Odin struct alignment)  |
+| 9-11   | —            | padding | Implicit 3-byte zero pad (header alignment)  |
 | 12     | `sprite_count` | u32le | Number of sprites in this bundle            |
 
 ## Scale Modes (`Texture_Scale_Mode`, stored as u8)
@@ -61,11 +61,11 @@ to 4 bytes so `sprite_count` is naturally aligned).
 Each entry is the **FNV-1a 32-bit hash** of the sprite's source PNG
 filename as an absolute path string (e.g. `"assets/units/christina/0001.png"`).
 
-The hash is computed with Odin's `hash.fnv32a` over the raw byte
+The hash is the standard FNV-1a 32-bit hash over the raw byte
 representation of the filename string.
 
 Entries are sorted in **ascending** hash order to enable binary search
-lookup at runtime (`slice.binary_search`).
+lookup at runtime (binary search).
 
 ## Sprite Crop Array — `Packed_Sprite_Crop` (8 bytes each)
 
@@ -107,10 +107,10 @@ Each `.spr` file has a matching atlas image:
 
 ## Notes
 
-- The file is read with `read_entire_file_aligned(…, 64)` for safe
-  pointer casting of the header and arrays directly from the mapped bytes.
-- Both the hash array and crop array are cast from raw byte pointers and
+- The file is loaded into memory and the header and arrays are read
+  directly from their fixed offsets in the raw bytes.
+- Both the hash array and crop array are indexed from their fixed offsets and
   sliced by `sprite_count` — there is no per-entry framing or length prefix.
 - The format is write-once at build time; no in-place editing is supported.
-- Both the packer and the loader treat the struct memory layout as the wire
+- Both the packer and the loader treat the fixed byte layout above as the wire
   format (no serialization layer).
