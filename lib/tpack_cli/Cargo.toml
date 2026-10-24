@@ -2,5 +2,5 @@
 name = "tpack_cli"
 version = "0.1.0"
 edition = "2021"
-description = "CLI parsing for tpack"
+description = "Generic command-line argument parser"
 license = "MIT"

@@ -15,6 +15,7 @@
 //   2 - invalid command-line arguments
 
 mod atlas;
+mod cli;
 mod config;
 mod incremental;
 mod packer;
@@ -27,16 +28,13 @@ use std::env;
 use std::process;
 
 use atlas::Error;
+use cli::Options;
 use config::{
-    default_thread_count, map_format_from_string, packing_mode_from_string,
-    scale_mode_from_string, valid_map_format_strings, valid_packing_mode_strings,
-    valid_scale_mode_strings, Default_Atlas_Height, Default_Atlas_Width, Default_Map_Array_Name,
-    Default_Map_Array_Type, Default_Map_Enum_Prefix, Default_Map_Format, Default_Scale_Mode,
-    Default_Sprite_Padding, Max_Atlas_Height, Max_Atlas_Width, Max_Sprite_Padding, Min_Threads,
-    Pack_Options,
+    map_format_from_string, packing_mode_from_string, scale_mode_from_string,
+    valid_map_format_strings, valid_packing_mode_strings, valid_scale_mode_strings,
+    Default_Atlas_Height, Default_Atlas_Width, Pack_Options,
 };
-use tpack_cli::{parse_args as cli_parse_args, Options as CliOptions, DEFAULT_GENETIC_GENS, DEFAULT_GENETIC_POP, DEFAULT_SEED};
-use util::is_valid_c_identifier;
+use tpack_cli::{CliError, parse_args as cli_parse_args};
 
 
 // main parses arguments, validates them, runs the packing pipeline, and
@@ -48,63 +46,34 @@ fn main() {
 }
 
 fn run(program: &str, args: &[String]) -> i32 {
-    // Seed defaults; argument parsing overwrites the ones the user supplied.
-    // width/height default to 0, meaning "not specified", so that auto-size
-    // (the default) is used unless the user supplies explicit dimensions.
-    let mut opt = CliOptions {
-        dir: String::new(),
-        atlas_path: String::new(),
-        sprite_map: String::new(),
-        atlas_width: 0,
-        atlas_height: 0,
-        auto_size: true,
-        no_auto_size: false,
-        spr_root: String::new(),
-        sprite_padding: Default_Sprite_Padding,
-        threads: default_thread_count(),
-        packing_mode: "skyline".to_string(),
-        scale_mode: Default_Scale_Mode.to_string(),
-        seed: DEFAULT_SEED,
-        genetic_pop: DEFAULT_GENETIC_POP,
-        genetic_gens: DEFAULT_GENETIC_GENS,
-        no_sort: false,
-        map_format: Default_Map_Format.to_string(),
-        map_enum_prefix: Default_Map_Enum_Prefix.to_string(),
-        map_array_name: Default_Map_Array_Name.to_string(),
-        map_array_type: Default_Map_Array_Type.to_string(),
-        no_overwrite: false,
-        incremental: false,
-    };
-
-    if let Err(e) = cli_parse_args(&mut opt, args, Min_Threads) {
-        // Each error type is turned into a plain, user-facing message. In
-        // particular, raw enum values (flag reasons, OS error codes) are never
-        // formatted directly, so the user never sees internal constants.
-        match e {
-            tpack_cli::CliError::Help => {
-                usage(program);
-                return 0;
-            }
-            tpack_cli::CliError::Message(message) => {
-                eprintln!("{program}: {message}");
-                return 2;
+    // Parse the UNIX-style command line against the generic parser; the
+    // parse result is an option-name/value map that fill_options folds
+    // into the defaults of the tool's own Options struct.
+    let arguments = match cli_parse_args(cli::spec(), args) {
+        Ok(arguments) => arguments,
+        Err(e) => {
+            // Each error type is turned into a plain, user-facing message.
+            // In particular, raw enum values (flag reasons, OS error codes)
+            // are never formatted directly, so the user never sees internal
+            // constants.
+            match e {
+                CliError::Help => {
+                    cli::usage(program);
+                    return 0;
+                }
+                CliError::Message(message) => {
+                    eprintln!("{program}: {message}");
+                    return 2;
+                }
             }
         }
-    }
+    };
+    let mut opt = Options::default();
+    cli::fill_options(&mut opt, &arguments);
 
     // Validate values that must be valid C identifiers
-    if !is_valid_c_identifier(&opt.map_array_name) {
-        eprintln!(
-            "{}: --map-array-name must be a valid C identifier, got {:?}",
-            program, opt.map_array_name
-        );
-        return 2;
-    }
-    if !is_valid_c_identifier(&opt.map_enum_prefix) {
-        eprintln!(
-            "{}: --map-enum-prefix must be a valid C identifier, got {:?}",
-            program, opt.map_enum_prefix
-        );
+    if let Err(message) = cli::validate(&opt) {
+        eprintln!("{program}: {message}");
         return 2;
     }
 
@@ -218,58 +187,4 @@ fn run(program: &str, args: &[String]) -> i32 {
             1
         }
     }
-}
-
-// usage prints the command-line help to stderr. Called for -h/-help and
-// mirrored in the error output for bad usage.
-fn usage(program: &str) {
-    eprintln!("Usage: {program} [options] <sprites_dir> <atlas_path> <sprite_map_path>\n");
-    eprintln!("Pack PNG sprites into a texture atlas and generate a sprite map.\n");
-    eprintln!("Arguments:");
-    eprintln!("  sprites_dir      Directory of PNG sprites (recursive)");
-    eprintln!("  atlas_path       Output atlas image path (PNG)");
-    eprintln!("  sprite_map_path  Output sprite map path\n");
-    eprintln!("Options:");
-    eprintln!(
-        "  --width <n>            Atlas width (default: {Default_Atlas_Width}, max: {Max_Atlas_Width})"
-    );
-    eprintln!(
-        "  --height <n>           Atlas height (default: {Default_Atlas_Height}, max: {Max_Atlas_Height})"
-    );
-    eprintln!(
-        "  --auto-size            Fit the smallest square power-of-two atlas for all sprites"
-    );
-    eprintln!("                           (default; used unless --width/--height are given)");
-    eprintln!("  --no-auto-size         Use explicit/default dimensions instead of auto-size");
-    eprintln!("  --spr-root <dir>       Project root: spr hashes paths relative to this");
-    eprintln!(
-        "  --sprite-padding <n>   Padding between sprites (default: {Default_Sprite_Padding}, max: {Max_Sprite_Padding})"
-    );
-    eprintln!(
-        "  --threads <n>          Worker threads for decoding/compositing (default: all cores, min: {Min_Threads})"
-    );
-    eprintln!("  --packing-mode <m>     Packing algorithm: skyline, skyline-bf, skyline-fast, genetic, maxrects, guillotine, best (default: skyline)");
-    eprintln!("  --seed <n>             Seed for genetic algorithm (default: 123456789)");
-    eprintln!("  --genetic-pop <n>      Genetic population size (default: 40)");
-    eprintln!("  --genetic-gens <n>     Genetic generations (default: 60)");
-    eprintln!(
-        "  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: {Default_Scale_Mode})"
-    );
-    eprintln!("  --no-sort              Don't sort sprites before packing");
-    eprintln!(
-        "  --map-format <f>       Sprite map format: auto, c, structured-c, json, ssm, spr (default: {Default_Map_Format})"
-    );
-    eprintln!(
-        "  --map-enum-prefix <p>  Enum prefix for structured-c (default: {Default_Map_Enum_Prefix})"
-    );
-    eprintln!(
-        "  --map-array-name <n>   Array name for C output (default: {Default_Map_Array_Name})"
-    );
-    eprintln!(
-        "  --map-array-type <t>   Array type for structured-c (default: {Default_Map_Array_Type})"
-    );
-    eprintln!("  --no-overwrite         Don't overwrite existing output files");
-    eprintln!("  --incremental          Skip the rebuild if the atlas and sprite map");
-    eprintln!("                           are newer than every source sprite");
-    eprintln!("  -h, -help              Show this help message");
 }

@@ -1,9 +1,14 @@
-// guillotine.rs - Guillotine splitting packer (simple alternative strategy).
-//
-// A straightforward guillotine bin packer used as one strategy in "best" mode.
-// Places rectangles in given order; splits remaining space with guillotine cuts.
-// Not as good as skyline in general but can help in some cases.
+//! guillotine.rs - Guillotine splitting packer (simple alternative strategy).
+//!
+//! A straightforward guillotine bin packer used as one strategy in "best"
+//! mode. Requests are placed largest-area first; every used free node is
+//! split into two leftover strips (right and below). It is not as good as
+//! the skyline packers in general but can help in some cases, and each
+//! placement is O(free-list scan) with no skyline bookkeeping.
 
+// Node is one free (or consumed) rectangle of the guillotine layout: x/y
+// is its top-left corner, w/h its extent, and used marks it as consumed
+// (kept in the list because the split step below still reads its fields).
 #[derive(Clone, Debug)]
 struct Node {
     x: i32,
@@ -13,6 +18,13 @@ struct Node {
     used: bool,
 }
 
+/// Rect is one guillotine placement outcome, index-aligned with the
+/// request list passed to [`pack_guillotine`].
+///
+/// When packed is false the request did not fit and the other fields are
+/// meaningless (all zero). Otherwise the content occupies
+/// `[x, x+w) × [y, y+h)`; the padding passed to [`pack_guillotine`] is not
+/// part of the rectangle, it only shifts x/y outward.
 #[derive(Clone, Debug)]
 pub struct Rect {
     pub x: i32,
@@ -22,6 +34,13 @@ pub struct Rect {
     pub packed: bool,
 }
 
+/// pack_guillotine places every (w, h) request into a width × height bin,
+/// largest-area first, and returns one [`Rect`] per request,
+/// index-aligned with requests.
+///
+/// A zero-extent request is "packed" at the origin without consuming
+/// space. A bin with non-positive dimensions rejects everything. Results
+/// report the content origin (padded slot origin + padding).
 pub fn pack_guillotine(requests: &[(i32, i32)], width: i32, height: i32, padding: i32) -> Vec<Rect> {
     let mut results = vec![
         Rect {
@@ -55,6 +74,9 @@ pub fn pack_guillotine(requests: &[(i32, i32)], width: i32, height: i32, padding
 
     for &idx in &order {
         let (rw, rh) = requests[idx];
+        // Padded request size. Non-positive padded extents (zero-extent
+        // requests with no padding, or negative request sizes) need no
+        // space and are marked packed at the origin.
         let w = rw + padding * 2;
         let h = rh + padding * 2;
         if w <= 0 || h <= 0 {
@@ -78,7 +100,12 @@ pub fn pack_guillotine(requests: &[(i32, i32)], width: i32, height: i32, padding
             let fy = free[ni].y;
             free[ni].used = true;
             results[idx] = Rect { x: fx + padding, y: fy + padding, w: rw, h: rh, packed: true };
-            // split
+            // Split the used node into two leftovers: a horizontal strip
+            // to the right of the placed rect (the node's full height) and
+            // a vertical strip below it. The vertical strip keeps the
+            // placed rect's padded width — anything to its right inside
+            // the node's bottom band is not carved out, so space there is
+            // lost; a trade chosen for simplicity.
             let free_w = free[ni].w - w;
             let free_h = free[ni].h - h;
             if free_w > 0 {

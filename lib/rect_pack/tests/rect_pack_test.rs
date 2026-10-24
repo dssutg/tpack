@@ -250,3 +250,146 @@ fn test_no_leaks() {
     }
     p.destroy();
 }
+
+// init with max_rects <= 0 gives an empty packer: nothing ever packs,
+// even rectangles that easily fit.
+#[test]
+fn test_empty_packer_rejects_everything() {
+    for max_rects in [0i32, -3] {
+        let mut p = Packer::default();
+        p.init(64, 64, max_rects, Heuristic::Skyline_default);
+        let requests = [Request { w: 8, h: 8 }, Request { w: 16, h: 16 }];
+        let (results, all_packed) = p.pack(&requests, 1, true);
+        assert!(!all_packed || requests.is_empty());
+        assert!(!results[0].was_packed);
+        assert!(!results[1].was_packed);
+
+        // an empty request list against the same packer stays successful
+        let (results, all_packed) = p.pack(&[], 1, true);
+        assert!(results.is_empty());
+        assert!(all_packed);
+    }
+}
+
+// Degenerate bin dimensions must reject every placement without panicking
+// (guards the width-quantization arithmetic, which divides by the bin
+// width).
+#[test]
+fn test_degenerate_bins_reject_everything() {
+    for (width, height) in [(0i32, 64i32), (64, 0), (-5, -5), (0, 0)] {
+        let mut p = Packer::default();
+        p.init(width, height, 4, Heuristic::Skyline_default);
+        let requests = [Request { w: 4, h: 4 }, Request { w: 2, h: 2 }];
+        let (results, all_packed) = p.pack(&requests, 1, true);
+        assert!(!all_packed, "bin {width}x{height} must not report success");
+        for r in results {
+            assert!(!r.was_packed);
+        }
+    }
+}
+
+// setup_allow_out_of_mem toggles width quantization; with the pool sizing
+// [init] uses both modes must pack identically (the knob exists for C-API
+// compatibility, see its docs).
+#[test]
+fn test_setup_allow_out_of_mem_modes_agree() {
+    let requests = [
+        Request { w: 13, h: 17 },
+        Request { w: 29, h: 3 },
+        Request { w: 5, h: 40 },
+        Request { w: 11, h: 11 },
+    ];
+    let mut quantized = Packer::default();
+    quantized.init(64, 64, 8, Heuristic::Skyline_default);
+    quantized.setup_allow_out_of_mem(false);
+    let mut exact = Packer::default();
+    exact.init(64, 64, 8, Heuristic::Skyline_default);
+    exact.setup_allow_out_of_mem(true);
+    let (a, aa) = quantized.pack(&requests, 1, true);
+    let (b, ab) = exact.pack(&requests, 1, true);
+    assert_eq!(a, b);
+    assert_eq!(aa, ab);
+}
+
+// setup_heuristic switches strategies without re-initializing the bin.
+#[test]
+fn test_setup_heuristic_switches_between_packs() {
+    let mut p = Packer::default();
+    p.init(64, 64, 16, Heuristic::Skyline_default);
+    let requests = [Request { w: 30, h: 30 }, Request { w: 20, h: 20 }, Request { w: 10, h: 10 }];
+    let _ = p.pack(&requests, 1, true);
+    // switch on the same packer: valid heuristics never panic
+    p.setup_heuristic(Heuristic::Skyline_BF_sortHeight);
+    let _ = p.pack(&requests, 1, true);
+    p.setup_heuristic(Heuristic::Skyline_BL_sortHeight);
+    let _ = p.pack(&requests, 1, true);
+}
+
+#[test]
+#[should_panic(expected = "rect_pack: init_target not called")]
+fn test_setup_heuristic_panics_before_init() {
+    let mut p = Packer::default();
+    p.setup_heuristic(Heuristic::Skyline_default);
+}
+
+// The free-node clamp: a packer initialized for max_rects rectangles
+// refuses to attempt more rectangles in one call than its node pool can
+// represent. The extras are never attempted, so all_packed (which only
+// reflects attempted placements) stays true here — the per-result
+// was_packed flags are the authoritative signal, see pack's docs.
+#[test]
+fn test_free_node_clamp() {
+    let mut p = Packer::default();
+    // pool = max(max_rects, width) = 20 free nodes
+    p.init(10, 64, 20, Heuristic::Skyline_default);
+    let requests: Vec<Request> = (0..21).map(|_| Request { w: 1, h: 1 }).collect();
+    let (results, all_packed) = p.pack(&requests, 0, false);
+    assert!(all_packed, "attempted placements all succeed here");
+    assert_eq!(results.iter().filter(|r| r.was_packed).count(), 20);
+    // the clamped-out request was never attempted and is reported unpacked
+    assert!(!results[20].was_packed);
+}
+
+// Calling pack twice on one packer continues filling the current bin;
+// the second call packs into the remaining space without re-init.
+#[test]
+fn test_second_pack_continues_filling() {
+    let mut p = Packer::default();
+    p.init(64, 64, 8, Heuristic::Skyline_default);
+    let requests = [Request { w: 30, h: 30 }, Request { w: 20, h: 20 }];
+    let (first, all_first) = p.pack(&requests, 1, true);
+    assert!(all_first);
+
+    // The remaining space still holds exactly one of the three.
+    let more = [Request { w: 10, h: 10 }];
+    let (second, all_second) = p.pack(&more, 1, true);
+    assert!(all_second);
+    assert!(second[0].was_packed);
+    // new placements must not collide with the first round
+    for r in first.iter().filter(|r| r.was_packed) {
+        let overlap = r.x - 1 < second[0].x + 10 + 1
+            && second[0].x - 1 < r.x + r.w
+            && r.y - 1 < second[0].y + 10 + 1
+            && second[0].y - 1 < r.y + r.h;
+        assert!(!overlap, "second-round placement overlaps a first-round one");
+    }
+}
+
+// Best-Fit may reject every left-aligned candidate (overflowing the bin
+// height) and then fall back to right-aligned candidates; whatever the
+// outcome, placements stay inside the bin and the result is aligned.
+#[test]
+fn test_best_fit_overflow_fallback() {
+    let mut p = Packer::default();
+    p.init(20, 5, 8, Heuristic::Skyline_BF_sortHeight);
+    let requests = [Request { w: 19, h: 4 }, Request { w: 8, h: 4 }, Request { w: 3, h: 5 }];
+    let (results, _) = p.pack(&requests, 0, false);
+    for (i, r) in results.iter().enumerate() {
+        if r.was_packed {
+            assert_eq!(r.w, requests[i].w);
+            assert_eq!(r.h, requests[i].h);
+            // content must fit the bin exactly (padding 0)
+            assert!(r.x >= 0 && r.y >= 0 && r.x + r.w <= 20 && r.y + r.h <= 5);
+        }
+    }
+}

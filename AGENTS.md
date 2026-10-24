@@ -14,6 +14,7 @@ make build / vet / harness / clean   # Makefile targets available
 ## Package Layout
 
 - `src/main.rs` — CLI parsing + `main()` entry
+- `src/cli.rs` — the tool's CLI surface: `Options` (raw CLI struct with defaults), the flag table handed to the generic parser, `fill_options`, post-parse validation, and usage text
 - `src/config.rs` — constants, `Map_Format` enum, lookup helpers
 - `src/atlas.rs` — `pack_sprites_to_atlas` orchestrator, `Error` enum, atlas PNG output. `pack_sprites_to_atlas` probes increasing power-of-two sizes (from `Min_Auto_Atlas_Size`) when auto-size is in effect (the default; enabled unless `--no-auto-size` or explicit `--width`/`--height`).
 - `src/sprites.rs` — sprite discovery/loading, `Sprite`/`Surface` structs, recursive walk; loads sprites in parallel via `src/parallel.rs`
@@ -22,7 +23,19 @@ make build / vet / harness / clean   # Makefile targets available
 - `src/incremental.rs` — `--incremental` staleness check: `outputs_are_current` stats both outputs and compares against `newest_sprite_mtime` (recursive, directories included).
 - `src/parallel.rs` — order-preserving scoped-thread helpers used for sprite decoding and atlas compositing
 - `src/util.rs` — helpers: `escape_json_string`, `escape_ssm_field`, `is_valid_c_identifier`
-- `lib/rect_pack/` — the skyline rectangle packer, a standalone Rust crate (port of `stb_rect_pack.h`). `src/lib.rs` holds the algorithm, `tests/rect_pack_test.rs` the tests.
+- `lib/rect_pack/` — rectangle packing crate: the Skyline packer (port of `stb_rect_pack.h`) in `src/lib.rs`, plus alternative strategies in `src/genetic.rs`, `src/guillotine.rs`, `src/maxrects.rs`, `src/skyline_alt.rs`; tests in `tests/`
+- `lib/tpack_cli/` — generic command-line parser. It knows only parsing mechanics (`Spec`/`OptionSpec`/`ArgKind`/`ValueKind`, `parse_args`, `Arguments`); it holds no tpack flag names, defaults, or option struct.
+- `lib/tpack_hash/` — FNV-1a hashing utilities for the `spr` format.
+
+## lib/ rules
+
+These rules apply to every crate under `lib/` (`rect_pack`, `tpack_cli`, `tpack_hash`):
+
+- **No tool knowledge:** lib crates must not depend on or import anything from `src/`, and must not hardcode the tool's option surface. The CLI parser receives the flag table as a `Spec` from the caller; tpack's flags, defaults, and `Options` struct live in `src/cli.rs`.
+- **Documented exports:** every exported symbol (types, functions, constants, methods) carries a `///` doc comment; crates have `//!` module docs.
+- **Commented complexity:** complex or non-obvious code (datastructure tricks, invariants, split/recycle logic, quirky leftovers) is explained with comments at the site.
+- **100% coverage, honestly:** tests target 100% line coverage of lib sources via `cargo llvm-cov --workspace` (install: `cargo install cargo-llvm-cov`). Prefer edge cases and indirect coverage through the public API over implementation-coupled tests. Code that truly cannot be covered carries an inline comment justifying why (e.g. defensive guards unreachable through the public API). Do not game the metric.
+- lib tests may not reference tpack's flag names or option structs either — they test the generic contracts.
 
 ## Gotchas
 
@@ -34,4 +47,4 @@ make build / vet / harness / clean   # Makefile targets available
 - Generated files (C/JSON/SSM) must escape filenames via the helpers in `src/util.rs`.
 - Case-insensitive extension matching (`.PNG`) is handled by `string_has_suffix_fold` in `src/sprites.rs`.
 - **`--auto-size` probes** call `pack_sprites_skyline` repeatedly; each probe overwrites the sprite offsets so the final probe leaves the correct layout.
-- **Threading:** `--threads <n>` defaults to `available_parallelism()` and must be at least 1. The skyline packer is sequential; threads parallelize PNG decoding and atlas compositing. Output must stay byte-identical for every thread count (harness checks this).
+- **Threading:** `--threads <n>` defaults to `available_parallelism()` and must be at least `Min_Threads` (1). The skyline packer is sequential; threads parallelize PNG decoding and atlas compositing. Output must stay byte-identical for every thread count (harness checks this).

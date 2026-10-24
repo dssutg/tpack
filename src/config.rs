@@ -55,9 +55,16 @@ pub const Default_Map_Enum_Prefix: &str = "SPRITE_"; // prefix for structured-c 
 pub const Default_Map_Array_Name: &str = "sprites"; // array name in C / structured-c output
 pub const Default_Map_Array_Type: &str = "SDL_Rect"; // element type in structured-c output
 
+// Genetic-algorithm defaults for --packing-mode genetic: fixed so runs are
+// reproducible, and used by --seed / --genetic-pop / --genetic-gens when the
+// user does not supply them.
+pub const Default_Seed: u64 = 123456789;
+pub const Default_Genetic_Pop: usize = 40;
+pub const Default_Genetic_Gens: usize = 60;
+
 // Pack_Options carries the fully-resolved set of options from the CLI into
 // the packing pipeline. It is the internal, typed form of the user's CLI
-// arguments (see Options in main.rs for the raw CLI struct).
+// arguments (see Options in cli.rs for the raw CLI struct).
 pub struct Pack_Options {
     pub dir: String,                    // directory to scan recursively for sprites
     pub atlas_path: String,             // output atlas image path (.png)

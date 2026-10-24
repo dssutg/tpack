@@ -1,6 +1,27 @@
+//! rect_pack packs axis-aligned, non-overlapping rectangles into a single
+//! width × height bin.
+//!
+//! The crate ships the Skyline (Bottom-Left / Best-Fit) packer — a pure
+//! Rust rewrite of stb_rect_pack.h v1.01 — plus several alternative
+//! strategies ([`guillotine`], [`maxrects`], [`genetic`], [`skyline_alt`])
+//! selectable through [`PackingMode`] and [`Packer::init`] /
+//! [`Packer::pack`].
+//!
+//! Results are index-aligned with requests: `results[i]` describes
+//! `requests[i]`; coordinates are pixel offsets in the bin and each
+//! packed rectangle occupies `[x, x+w) × [y, y+h)`.
+
+/// genetic implements a genetic-algorithm packing strategy (see the module
+/// for details).
 pub mod genetic;
+/// guillotine implements a guillotine-cut packing strategy (see the module
+/// for details).
 pub mod guillotine;
+/// maxrects implements a MaxRects-style packing strategy (see the module
+/// for details).
 pub mod maxrects;
+/// skyline_alt packs with the skyline packer under several orderings and
+/// heuristics (see the module for details).
 pub mod skyline_alt;
 
 // Package rect_pack is a skyline rectangle packer.
@@ -103,52 +124,58 @@ const NIL: i32 = -1;
 // special-casing the head-of-list write.
 const HEAD_LINK: i32 = -2;
 
-// Heuristic selects which packing strategy [pack] uses.
-//
-// Skyline_default (Bottom-Left) picks the placement with the lowest y over
-// all valid x positions.  It is fast (single scan per candidate) and works
-// well for most atlas layouts.
-//
-// Skyline_BF_sortHeight (Best-Fit) additionally minimises the wasted area
-// beneath the placed rectangle and also tries aligning the rectangle's
-// right edge to each skyline node.  This usually packs tighter but takes
-// about twice as long because of the extra right-alignment pass.
-//
-// Different heuristics produce better/worse results for different data
-// sets; Skyline_default is a sensible, faster starting point.
-//
-// Note: `Skyline_default == Skyline_BL_sortHeight` (both 0), so this is a
-// newtype rather than an enum to preserve the original's aliasing.
+/// Heuristic selects which packing strategy [`Packer::pack`] uses.
+///
+/// `Skyline_default` (Bottom-Left) picks the placement with the lowest y
+/// over all valid x positions. It is fast (single scan per candidate) and
+/// works well for most atlas layouts.
+///
+/// `Skyline_BF_sortHeight` (Best-Fit) additionally minimises the wasted
+/// area beneath the placed rectangle and also tries aligning the
+/// rectangle's right edge to each skyline node. This usually packs
+/// tighter but takes about twice as long because of the extra
+/// right-alignment pass.
+///
+/// Different heuristics produce better/worse results for different data
+/// sets; `Skyline_default` is a sensible, faster starting point.
+///
+/// Note: `Skyline_default == Skyline_BL_sortHeight` (both 0), so this is a
+/// newtype rather than an enum to preserve the original's aliasing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Heuristic(i32);
 
 #[allow(non_upper_case_globals)]
 impl Heuristic {
+    /// Skyline_default is the Bottom-Left skyline heuristic.
     pub const Skyline_default: Heuristic = Heuristic(0);
+    /// Skyline_BL_sortHeight is an alias of [`Heuristic::Skyline_default`]
+    /// kept for compatibility with the C API's name.
     pub const Skyline_BL_sortHeight: Heuristic = Heuristic(0);
+    /// Skyline_BF_sortHeight is the Best-Fit skyline heuristic.
     pub const Skyline_BF_sortHeight: Heuristic = Heuristic(1);
 }
 
-// Request is the size of a single rectangle to pack. Requests are not
-// mutated; [pack] copies them into internal scratch before sorting.
+/// Request is the size of a single rectangle to pack. Requests are not
+/// mutated; [`Packer::pack`] copies them into internal scratch before
+/// sorting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Request {
     pub w: i32,
     pub h: i32,
 }
 
-// Result is the placement outcome for one request, index-aligned with it.
-//
-// If was_packed is false the rectangle did not fit and all fields except
-// w/h are zeroed.  Otherwise the rectangle content occupies
-// [x, x+w) x [y, y+h) inside the bin; the padding passed to [pack] is not
-// part of the rectangle itself — it only shifts x/y and keeps gaps between
-// neighboring contents, so the padded slot spans [x-padding, x+w+padding)
-// x [y-padding, y+h+padding).
-//
-// Coordinates are bottom-left in Cartesian terms (y increases upward), or
-// top-left if you imagine y increasing downward — the packer is
-// orientation-agnostic.
+/// Result is the placement outcome for one request, index-aligned with it.
+///
+/// If was_packed is false the rectangle did not fit and all fields except
+/// w/h are zeroed. Otherwise the rectangle content occupies
+/// `[x, x+w) × [y, y+h)` inside the bin; the padding passed to
+/// [`Packer::pack`] is not part of the rectangle itself — it only shifts
+/// x/y and keeps gaps between neighboring contents, so the padded slot
+/// spans `[x-padding, x+w+padding) × [y-padding, y+h+padding)`.
+///
+/// Coordinates are bottom-left in Cartesian terms (y increases upward), or
+/// top-left if you imagine y increasing downward — the packer is
+/// orientation-agnostic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Result {
     pub x: i32,
@@ -160,8 +187,8 @@ pub struct Result {
 
 // Node is a single step in the skyline. x is the horizontal position where
 // this step starts, y is its height, and next is the index of the next node
-// (NIL for the right-edge sentinel).  Nodes live in a flat pool owned by
-// [Packer]; the pool is partitioned at runtime into the active skyline chain
+// (NIL for the right-edge sentinel). Nodes live in a flat pool owned by
+// [`Packer`]; the pool is partitioned at runtime into the active skyline chain
 // (linked through active_head) and a free list (linked through free_head).
 // Callers never inspect or construct Node values directly.
 #[derive(Clone, Copy, Debug, Default)]
@@ -171,21 +198,22 @@ struct Node {
     next: i32,
 }
 
-// Packer places rectangles into a single width x height bin using the
-// skyline heuristic.
-//
-// Internally it maintains an active-chain of skyline nodes (singly-linked
-// through .next, head stored in active_head) plus a free-list of unused
-// nodes (head in free_head).  During [init] both chains are carved from
-// a single Vec<Node> pool: nodes 0 and 1 are the sentinel pair (the initial
-// flat skyline), and the remainder are threaded into the free list.
-//
-// Storage is allocated once during [init]: enough skyline nodes for up to
-// max_rects rectangles plus at least one node per column of the bin so that
-// request widths are never quantized (see [setup_allow_out_of_mem] for the
-// alternative). Nothing else is allocated except the results returned by
-// [pack] and transient scratch inside it, so a Packer can be reused for many
-// bins by calling [init] again.
+/// Packer places rectangles into a single width × height bin using the
+/// skyline heuristic.
+///
+/// Internally it maintains an active-chain of skyline nodes (singly-linked
+/// through `.next`, head stored in active_head) plus a free-list of unused
+/// nodes (head in free_head). During [`Self::init`] both chains are carved
+/// from a single `Vec<Node>` pool: nodes 0 and 1 are the sentinel pair (the
+/// initial flat skyline), and the remainder are threaded into the free list.
+///
+/// Storage is allocated once during [`Self::init`]: enough skyline nodes
+/// for up to max_rects rectangles plus at least one node per column of the
+/// bin so that request widths are never quantized (see
+/// [`Self::setup_allow_out_of_mem`] for the alternative). Nothing else is
+/// allocated except the results returned by [`Self::pack`] and transient
+/// scratch inside it, so a Packer can be reused for many bins by calling
+/// [`Self::init`] again.
 #[derive(Clone, Debug, Default)]
 pub struct Packer {
     nodes: Vec<Node>, // skyline node pool: active chain + free chain interleaved
@@ -220,19 +248,22 @@ impl Packer {
     // Lifecycle.
     // ---------------------------------------------------------------------------
 
-    // init prepares packer for packing into a fresh width x height bin that can
-    // hold at most max_rects rectangles, resetting any previous state.
-    //
-    // The heuristic argument selects the packing heuristic subsequent [pack]
-    // calls use (see [Heuristic]).
-    //
-    // It must be called before every new bin; calling [pack] again afterwards
-    // without re-initializing continues filling the current bin instead.
-    //
-    // The node pool is sized to max(max_rects, width) + 2, which guarantees
-    // that even in the worst case (every rectangle is one pixel wide) the
-    // skyline never needs more nodes than are available.  If max_rects <= 0
-    // the packer is initialized to an empty state that rejects all placements.
+    /// init prepares packer for packing into a fresh width × height bin
+    /// that can hold at most max_rects rectangles, resetting any previous
+    /// state.
+    ///
+    /// The heuristic argument selects the packing heuristic subsequent
+    /// [`Self::pack`] calls use (see [`Heuristic`]).
+    ///
+    /// It must be called before every new bin; calling [`Self::pack`]
+    /// again afterwards without re-initializing continues filling the
+    /// current bin instead.
+    ///
+    /// The node pool is sized to `max(max_rects, width) + 2`, which
+    /// guarantees that even in the worst case (every rectangle is one
+    /// pixel wide) the skyline never needs more nodes than are available.
+    /// If `max_rects <= 0` the packer is initialized to an empty state
+    /// that rejects all placements.
     pub fn init(&mut self, width: i32, height: i32, max_rects: i32, heuristic: Heuristic) {
         // Reset the struct to zero/defaults. Dropping the old node pool
         // releases it, so re-init for a new bin must not leak.
@@ -257,8 +288,8 @@ impl Packer {
         self.setup_heuristic(heuristic);
     }
 
-    // destroy releases all storage owned by the packer. Safe to call on an
-    // already destroyed or never initialized packer.
+    /// destroy releases all storage owned by the packer. Safe to call on an
+    /// already destroyed or never initialized packer.
     pub fn destroy(&mut self) {
         self.nodes = Vec::new();
         *self = Packer::default();
@@ -268,36 +299,54 @@ impl Packer {
     // Configuration.
     // ---------------------------------------------------------------------------
 
-    // setup_allow_out_of_mem controls width quantization.  When allow is false
-    // (the default) request widths are rounded up to multiples of
-    // ceil(width / free_count) so the skyline never grows beyond the pool.
-    // This guarantees the algorithm never runs out of nodes, at the cost of
-    // slightly wider packed slots.
-    //
-    // When allow is true, widths are used exactly (align = 1).  This gives
-    // tighter packing but the algorithm can fail with an out-of-nodes error
-    // even though the rectangles physically fit in the bin.
-    //
-    // The original C comment: "A smarter approach would be to only quantize
-    // once we've hit OOM, then we could get rid of this parameter."
-    #[allow(dead_code)]
-    fn setup_allow_out_of_mem(&mut self, allow: bool) {
+    /// setup_allow_out_of_mem controls width quantization. When allow is
+    /// false (the default) request widths are rounded up to multiples of
+    /// `ceil(width / free_count)` so the skyline never grows beyond the
+    /// pool. This guarantees the algorithm never runs out of nodes, at the
+    /// cost of slightly wider packed slots.
+    ///
+    /// When allow is true, widths are used exactly (align = 1). This gives
+    /// tighter packing but the algorithm can fail with an out-of-nodes
+    /// error even though the rectangles physically fit in the bin.
+    ///
+    /// Both settings behave identically for a pool created by
+    /// [`Self::init`]: init sizes the pool with at least one node per
+    /// column, which makes the computed alignment 1 (no quantization).
+    /// The knob is kept for compatibility with the original
+    /// stb_rect_pack.h API (`stbrp_setup_allow_out_of_mem`) and in case
+    /// node-pool management changes.
+    ///
+    /// The original C comment: "A smarter approach would be to only
+    /// quantize once we've hit OOM, then we could get rid of this
+    /// parameter."
+    pub fn setup_allow_out_of_mem(&mut self, allow: bool) {
         if allow {
             // no quantization: use exact widths (tighter packing, may run out of nodes)
             self.align = 1;
         } else {
             // quantize widths so that free_count * align >= width, guaranteeing
-            // the skyline never needs more nodes than the pool provides
+            // the skyline never needs more nodes than the pool provides.
+            // The clamp to 1 guards degenerate bins: a non-positive width
+            // would otherwise produce align = 0 (division later), and the
+            // find_best_pos modulo must never see a zero or negative align.
+            // For every sane positive width the quotient is already >= 1.
             let free = self.free_count().max(1);
-            self.align = (self.width + free - 1) / free;
+            self.align = ((self.width + free - 1) / free).max(1);
         }
     }
 
-    // setup_heuristic selects the packing heuristic used by subsequent [pack]
-    // calls. [init] already accepts a heuristic, so this is only needed to
-    // switch between packs without re-initializing.
-    #[allow(dead_code)]
-    fn setup_heuristic(&mut self, heuristic: Heuristic) {
+    /// setup_heuristic selects the packing heuristic used by subsequent
+    /// [`Self::pack`] calls. [`Self::init`] already accepts a heuristic,
+    /// so this is only needed to switch between packs without
+    /// re-initializing.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the packer has not been initialized (never through
+    /// [`Self::init`]) or when heuristic is neither
+    /// [`Heuristic::Skyline_default`] nor
+    /// [`Heuristic::Skyline_BF_sortHeight`].
+    pub fn setup_heuristic(&mut self, heuristic: Heuristic) {
         if !self.initialized {
             panic!("rect_pack: init_target not called");
         }
@@ -305,6 +354,11 @@ impl Packer {
         {
             self.heuristic = heuristic;
         } else {
+            // Unreachable through the public API: callers outside the crate
+            // cannot construct a Heuristic other than the constants above
+            // (the raw i32 field is private) and those pass this check. The
+            // guard exists so future internal callers cannot silently pack
+            // with an unrecognized strategy.
             panic!("rect_pack: invalid heuristic");
         }
     }
@@ -333,6 +387,9 @@ impl Packer {
         self.heuristic = Heuristic::Skyline_default;
         // free_head starts at node 2 (first non-sentinel); if only 2 nodes exist
         // there are no free nodes to place into, so mark the list empty.
+        // That branch is unreachable through init: it early-returns for
+        // max_rects <= 0, so a pool that reaches here always has at least
+        // one free node (n >= 3).
         self.free_head = if n > 2 { 2 } else { NIL };
         self.width = width;
         self.height = height;
@@ -592,6 +649,12 @@ impl Packer {
         //  2. The candidate y + height exceeds the bin top.
         //  3. The free list is empty — no node available to represent the new
         //     skyline step above the placed rectangle.
+        //
+        // Condition 3 is unreachable through pack(): the per-call clamp of
+        // attempted rectangles to free_count() guarantees at most one net
+        // node consumption per attempt (each placement pops one node and
+        // recycles >= 0 back), so an attempt can never start with an empty
+        // free list. It stays as a C-parity guard against internal misuse.
         if res.link == NIL || res.y + height > self.height || self.free_head == NIL {
             return None;
         }
@@ -651,33 +714,37 @@ impl Packer {
     // Public packing API.
     // ---------------------------------------------------------------------------
 
-    // pack places every requested rectangle into the current bin and returns
-    // placements index-aligned with requests. The second return reports
-    // whether every request was packed.
-    //
-    // The algorithm:
-    //  1. Copy requests into scratch (Tagged), adding padding on each side and
-    //     recording original indices so the caller's slice is never reordered.
-    //  2. Sort the scratch tallest-first (deterministic tie-break by index) so
-    //     large rectangles are placed first when the skyline is most open.
-    //  3. Place each rectangle via pack_single, which modifies the skyline
-    //     node pool but nothing else.
-    //  4. Results are written back index-aligned with the original requests.
-    //
-    // Calling pack again on the same packer continues filling the current bin;
-    // call [init] first to start a new bin.  Requests are copied into scratch
-    // before packing, so the caller's slice is never reordered and stays safe
-    // to read from other threads.
-    //
-    // At most free_count rectangles can be packed per call; extra requests
-    // beyond that capacity stay unpacked rather than overflowing the skyline
-    // storage.  Check was_packed per result as well.
-    //
-    // padding grows every rectangle by padding pixels on each side before
-    // packing (to w+2*padding by h+2*padding) so packed rectangles never touch;
-    // this prevents edge bleeding when a shared sheet is sampled with linear
-    // filtering.  It defaults to 1.  Results are padding-free: x/y point at the
-    // content (slot origin + padding) and w/h mirror the request size.
+    /// pack places every requested rectangle into the current bin and
+    /// returns placements index-aligned with requests. The second return
+    /// reports whether every request was packed.
+    ///
+    /// The algorithm:
+    /// 1. Copy requests into scratch (Tagged), adding padding on each side
+    ///    and recording original indices so the caller's slice is never
+    ///    reordered.
+    /// 2. Sort the scratch tallest-first (deterministic tie-break by
+    ///    index) so large rectangles are placed first while the skyline
+    ///    is most open.
+    /// 3. Place each rectangle via `pack_single`, which modifies the
+    ///    skyline node pool but nothing else.
+    /// 4. Results are written back index-aligned with the original
+    ///    requests.
+    ///
+    /// Calling pack again on the same packer continues filling the current
+    /// bin; call [`Self::init`] first to start a new bin. Requests are
+    /// copied into scratch before packing, so the caller's slice is never
+    /// reordered and stays safe to read from other threads.
+    ///
+    /// At most free_count rectangles can be packed per call; extra
+    /// requests beyond that capacity stay unpacked rather than overflowing
+    /// the skyline storage. Check was_packed per result as well.
+    ///
+    /// padding grows every rectangle by padding pixels on each side before
+    /// packing (to `w+2*padding` by `h+2*padding`) so packed rectangles
+    /// never touch; this prevents edge bleeding when a shared sheet is
+    /// sampled with linear filtering. It defaults to 1 in
+    /// [`Self::init`]'s sizing. Results are padding-free: x/y point at the
+    /// content (slot origin + padding) and w/h mirror the request size.
     pub fn pack(
         &mut self,
         requests: &[Request],
@@ -786,7 +853,12 @@ struct Tagged {
 }
 
 
-// PackingMode selects which packing strategy to use.
+/// PackingMode selects which packing strategy to use.
+///
+/// The Skyline variants use [`Packer`] with the matching [`Heuristic`];
+/// the others call the alternative strategy modules. `Best` tries the
+/// fastest strategy first and upgrades through the slower ones whenever
+/// the earlier ones cannot pack every rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PackingMode {
     Skyline,
@@ -800,6 +872,11 @@ pub enum PackingMode {
 
 /// pack_best tries multiple algorithms in order: fastest skyline, then
 /// slower skyline variants, then genetic.
+///
+/// The strategy that packs the most rectangles wins; ties are broken by
+/// the first strategy to reach that count, and any strategy that packs
+/// every rectangle ends the search early. Requests are not reordered, so
+/// the returned placements stay index-aligned with them.
 #[allow(unused_assignments)]
 pub fn pack_best(requests: &[Request], width: i32, height: i32, padding: i32) -> (Vec<Result>, bool) {
     let mut best_res: Vec<Result> = vec![Result::default(); requests.len()];
