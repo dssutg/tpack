@@ -92,7 +92,7 @@ fn run(program: &str, args: &[String]) -> i32 {
         sprite_padding: Default_Sprite_Padding,
         heuristic: Default_Heuristic.to_string(),
         threads: default_thread_count(),
-        packing_mode: "best".to_string(),
+        packing_mode: "skyline".to_string(),
         scale_mode: Default_Scale_Mode.to_string(),
         no_sort: false,
         map_format: Default_Map_Format.to_string(),
@@ -372,7 +372,7 @@ fn usage(program: &str) {
     eprintln!(
         "  --threads <n>          Worker threads for decoding/compositing (default: all cores, min: {Min_Threads})"
     );
-    eprintln!("  --packing-mode <m>     Packing strategy: skyline, genetic, maxrects, guillotine, best (default: best)");
+    eprintln!("  --packing-mode <m>     Packing strategy: skyline, genetic, maxrects, guillotine, best (default: skyline)");
     eprintln!(
         "  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: {Default_Scale_Mode})"
     );
