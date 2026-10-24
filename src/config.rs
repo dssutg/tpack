@@ -9,7 +9,7 @@
 
 use std::thread;
 
-use rect_pack::Heuristic;
+use rect_pack::{Heuristic, PackingMode};
 
 // Map_Format enumerates the supported sprite-map output formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +72,7 @@ pub struct Pack_Options {
     pub heuristic: Heuristic, // packing heuristic (bl / bf)
     pub sort: bool,       // sort sprites largest-first before packing
     pub threads: usize,   // worker threads for decoding and compositing
+    pub packing_mode: PackingMode, // packing strategy
     pub map_format: Map_Format, // sprite map output format
     pub map_enum_prefix: String, // enum prefix for structured-c
     pub map_array_name: String, // array name for c / structured-c
@@ -124,6 +125,23 @@ pub fn scale_mode_from_string(s: &str) -> Option<Spr_Scale_Mode> {
         "pixel-art" => Some(Spr_Scale_Mode::Pixel_Art),
         _ => None,
     }
+}
+
+// packing_mode_from_string resolves CLI string to PackingMode.
+pub fn packing_mode_from_string(s: &str) -> Option<PackingMode> {
+    match s.to_lowercase().as_str() {
+        "skyline" => Some(PackingMode::Skyline),
+        "guillotine" => Some(PackingMode::Guillotine),
+        "maxrects" | "max-rects" => Some(PackingMode::MaxRects),
+        "genetic" => Some(PackingMode::Genetic),
+        "best" => Some(PackingMode::Best),
+        _ => None,
+    }
+}
+
+// valid_packing_mode_strings returns valid values for help/errors.
+pub fn valid_packing_mode_strings() -> Vec<&'static str> {
+    vec!["best", "genetic", "guillotine", "maxrects", "skyline"]
 }
 
 // default_thread_count returns the number of worker threads used when

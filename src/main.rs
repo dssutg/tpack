@@ -28,8 +28,9 @@ use std::process;
 
 use atlas::Error;
 use config::{
-    default_thread_count, heuristic_from_string, map_format_from_string, scale_mode_from_string,
-    valid_heuristic_strings, valid_map_format_strings, valid_scale_mode_strings,
+    default_thread_count, heuristic_from_string, map_format_from_string, packing_mode_from_string,
+    scale_mode_from_string, valid_heuristic_strings, valid_map_format_strings,
+    valid_packing_mode_strings, valid_scale_mode_strings,
     Default_Atlas_Height, Default_Atlas_Width, Default_Heuristic, Default_Map_Array_Name,
     Default_Map_Array_Type, Default_Map_Enum_Prefix, Default_Map_Format, Default_Scale_Mode,
     Default_Sprite_Padding, Max_Atlas_Height, Max_Atlas_Width, Max_Sprite_Padding, Min_Threads,
@@ -51,6 +52,7 @@ struct Options {
     sprite_padding: i32,     // gap between sprites
     heuristic: String,       // bl (bottom-left) or bf (best-fit)
     threads: usize,          // worker threads for decoding/compositing
+    packing_mode: String,    // skyline/genetic/best/...
     scale_mode: String,      // nearest, linear, or pixel-art
     no_sort: bool,           // disable size pre-sorting
     map_format: String,      // auto/c/structured-c/json/ssm/spr
@@ -90,6 +92,7 @@ fn run(program: &str, args: &[String]) -> i32 {
         sprite_padding: Default_Sprite_Padding,
         heuristic: Default_Heuristic.to_string(),
         threads: default_thread_count(),
+        packing_mode: "best".to_string(),
         scale_mode: Default_Scale_Mode.to_string(),
         no_sort: false,
         map_format: Default_Map_Format.to_string(),
@@ -152,6 +155,15 @@ fn run(program: &str, args: &[String]) -> i32 {
         }
     };
 
+    let packing_mode = match packing_mode_from_string(&opt.packing_mode) {
+        Some(m) => m,
+        None => {
+            let valid = valid_packing_mode_strings().join(", ");
+            eprintln!("{}: invalid packing mode. Valid: {}", program, valid);
+            return 2;
+        }
+    };
+
     // Resolve the scale-mode name to a Spr_Scale_Mode
     let scale_mode = match scale_mode_from_string(&opt.scale_mode) {
         Some(m) => m,
@@ -201,6 +213,7 @@ fn run(program: &str, args: &[String]) -> i32 {
         heuristic,
         sort: !opt.no_sort,
         threads: opt.threads,
+        packing_mode,
         map_format,
         map_enum_prefix: opt.map_enum_prefix,
         map_array_name: opt.map_array_name,
@@ -286,6 +299,9 @@ fn parse_args(opt: &mut Options, args: &[String]) -> Result<(), CliError> {
                     }
                     opt.threads = threads;
                 }
+                "packing-mode" | "algorithm" => {
+                    opt.packing_mode = next_value(&mut i)?;
+                }
                 "scale-mode" => opt.scale_mode = next_value(&mut i)?,
                 "no-sort" => opt.no_sort = true,
                 "map-format" => opt.map_format = next_value(&mut i)?,
@@ -356,6 +372,7 @@ fn usage(program: &str) {
     eprintln!(
         "  --threads <n>          Worker threads for decoding/compositing (default: all cores, min: {Min_Threads})"
     );
+    eprintln!("  --packing-mode <m>     Packing strategy: skyline, genetic, maxrects, guillotine, best (default: best)");
     eprintln!(
         "  --scale-mode <m>       Atlas scale mode: nearest, linear, or pixel-art (default: {Default_Scale_Mode})"
     );

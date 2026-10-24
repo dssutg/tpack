@@ -125,6 +125,7 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
                 opt.sprite_padding,
                 opt.heuristic,
                 opt.sort,
+                opt.packing_mode,
             );
             if packed == sprites.len() {
                 break;
@@ -145,6 +146,7 @@ pub fn pack_sprites_to_atlas(opt: &Pack_Options) -> Result<(), Error> {
             opt.sprite_padding,
             opt.heuristic,
             opt.sort,
+            opt.packing_mode,
         );
         if packed != sprites.len() {
             // Not everything fit. The caller reports the failures.

@@ -26,28 +26,54 @@ pub fn pack_sprites_skyline(
     padding: i32,
     heuristic: rp::Heuristic,
     should_sort: bool,
+    packing_mode: rp::PackingMode,
 ) -> usize {
-    let mut packer = rp::Packer::default();
-    packer.init(atlas_width, atlas_height, sprites.len() as i32, heuristic);
-
-    // Build the request list, inflating each rect by padding on all sides.
+    // Build the request list
     let requests: Vec<rp::Request> = sprites
         .iter()
         .map(|s| rp::Request {
-            w: s.surface.width as i32 + padding * 2,
-            h: s.surface.height as i32 + padding * 2,
+            w: s.surface.width as i32,
+            h: s.surface.height as i32,
         })
         .collect();
 
-    // We already padded the requests; tell the packer not to add more.
-    // Results are index-aligned with requests.
-    let (results, _) = packer.pack(&requests, 0, should_sort);
+    let results = match packing_mode {
+        rp::PackingMode::Skyline => {
+            let mut packer = rp::Packer::default();
+            packer.init(atlas_width, atlas_height, sprites.len() as i32, heuristic);
+            let (results, _) = packer.pack(&requests, padding, should_sort);
+            results
+        }
+        rp::PackingMode::Guillotine => {
+            let greqs: Vec<(i32, i32)> = requests.iter().map(|r| (r.w, r.h)).collect();
+            let g = rp::guillotine::pack_guillotine(&greqs, atlas_width, atlas_height, padding);
+            let mut results = vec![rp::Result::default(); sprites.len()];
+            for i in 0..sprites.len() {
+                results[i].w = g[i].w;
+                results[i].h = g[i].h;
+                results[i].x = g[i].x;
+                results[i].y = g[i].y;
+                results[i].was_packed = g[i].packed;
+            }
+            results
+        }
+        rp::PackingMode::MaxRects => {
+            let (results, _) = rp::maxrects::pack_maxrects(&requests, atlas_width, atlas_height, padding);
+            results
+        }
+        rp::PackingMode::Genetic => {
+            let (results, _) = rp::genetic::pack_genetic(&requests, atlas_width, atlas_height, padding);
+            results
+        }
+        rp::PackingMode::Best => {
+            let (results, _) = rp::pack_best(&requests, atlas_width, atlas_height, padding);
+            results
+        }
+    };
     let mut packed = 0;
 
     for (s, r) in sprites.iter_mut().zip(results.iter()) {
         if r.was_packed {
-            // rect_pack already shifted x/y by +padding to point at the
-            // content origin, so store these directly.
             s.offset = (r.x, r.y);
             s.packed = true;
             packed += 1;
