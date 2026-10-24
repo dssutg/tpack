@@ -1,5 +1,5 @@
 [package]
-name = "tpack_cli"
+name = "cli-parser"
 version = "0.1.0"
 edition = "2021"
 description = "Generic command-line argument parser"

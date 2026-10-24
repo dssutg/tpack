@@ -2,14 +2,14 @@
 //
 // This module owns everything the tool knows about its own flags: the
 // Options struct (raw CLI form with defaults), the flag table handed to
-// the generic parser in lib/tpack_cli, translation of parsed arguments
+// the generic parser in lib/cli-parser, translation of parsed arguments
 // into Options, post-parse validation, and the usage text.
 //
-// lib/tpack_cli itself is option-agnostic: it only knows the mechanics of
+// lib/cli-parser itself is option-agnostic: it only knows the mechanics of
 // parsing --name/value tokens for whatever specs it is handed. Everything
 // tpack-specific lives here so the parser library stays general.
 
-use tpack_cli::{ArgKind, Arguments, OptionSpec, Spec, Value, ValueKind};
+use cli_parser::{ArgKind, Arguments, OptionSpec, Spec, Value, ValueKind};
 
 use crate::config::{
     Default_Atlas_Height, Default_Atlas_Width, Default_Genetic_Gens, Default_Genetic_Pop,

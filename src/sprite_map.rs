@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
-use tpack_hash::fnv32a;
+use hashing::fnv32a;
 
 
 use crate::atlas::Error;

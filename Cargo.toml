@@ -6,12 +6,12 @@ description = "Texture packing CLI"
 license = "MIT"
 
 [workspace]
-members = ["lib/rect_pack", "lib/tpack_cli", "lib/tpack_hash"]
+members = ["lib/rect_pack", "lib/cli-parser", "lib/hashing"]
 resolver = "2"
 
 [dependencies]
-tpack_cli = { path = "lib/tpack_cli" }
-tpack_hash = { path = "lib/tpack_hash" }
+cli-parser = { path = "lib/cli-parser" }
+hashing = { path = "lib/hashing" }
 bytemuck = "1.25"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rect_pack = { path = "lib/rect_pack" }

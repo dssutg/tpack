@@ -1,4 +1,4 @@
-//! tpack_cli is a small, dependency-free command-line argument parser.
+//! cli_parser is a small, dependency-free command-line argument parser.
 //!
 //! The library is deliberately *generic*: it contains no knowledge of any
 //! particular application's option set. The application supplies a
@@ -41,7 +41,7 @@
 //! Let the application declare two options and three positionals:
 //!
 //! ```
-//! # use tpack_cli::{parse_args, CliError, Spec, OptionSpec, ArgKind, ValueKind};
+//! # use cli_parser::{parse_args, CliError, Spec, OptionSpec, ArgKind, ValueKind};
 //! const SPEC: &[OptionSpec] = &[
 //!     OptionSpec { name: "out-name", kind: ArgKind::Value(ValueKind::Text) },
 //!     OptionSpec { name: "jobs", kind: ArgKind::Value(ValueKind::Usize {
@@ -56,8 +56,8 @@
 //! assert_eq!(arguments.positionals, ["in.png"]);
 //! ```
 //!
-//! The crate is named for the tpack project it ships with, but nothing in
-//! it is specific to that tool.
+//! The crate is generic and dependency-free: nothing in it is specific to
+//! any particular tool or project.
 
 /// ValueKind enumerates the kinds of value an option's argument can take.
 ///

@@ -24,12 +24,12 @@ make build / vet / harness / clean   # Makefile targets available
 - `src/parallel.rs` — order-preserving scoped-thread helpers used for sprite decoding and atlas compositing
 - `src/util.rs` — helpers: `escape_json_string`, `escape_ssm_field`, `is_valid_c_identifier`
 - `lib/rect_pack/` — rectangle packing crate: the Skyline packer (port of `stb_rect_pack.h`) in `src/lib.rs`, plus alternative strategies in `src/genetic.rs`, `src/guillotine.rs`, `src/maxrects.rs`, `src/skyline_alt.rs`; tests in `tests/`
-- `lib/tpack_cli/` — generic command-line parser. It knows only parsing mechanics (`Spec`/`OptionSpec`/`ArgKind`/`ValueKind`, `parse_args`, `Arguments`); it holds no tpack flag names, defaults, or option struct.
-- `lib/tpack_hash/` — FNV-1a hashing utilities for the `spr` format.
+- `lib/cli-parser/` — generic command-line parser. It knows only parsing mechanics (`Spec`/`OptionSpec`/`ArgKind`/`ValueKind`, `parse_args`, `Arguments`); it holds no tpack flag names, defaults, or option struct.
+- `lib/hashing/` — FNV-1a hashing utilities (used for the `spr` format's path keys).
 
 ## lib/ rules
 
-These rules apply to every crate under `lib/` (`rect_pack`, `tpack_cli`, `tpack_hash`):
+These rules apply to every crate under `lib/` (`rect_pack`, `cli-parser`, `hashing`): lib crates are general-purpose and usable outside this repo, so nothing in them may be coupled to the project — not imports, option surface, or naming.
 
 - **No tool knowledge:** lib crates must not depend on or import anything from `src/`, and must not hardcode the tool's option surface. The CLI parser receives the flag table as a `Spec` from the caller; tpack's flags, defaults, and `Options` struct live in `src/cli.rs`.
 - **Documented exports:** every exported symbol (types, functions, constants, methods) carries a `///` doc comment; crates have `//!` module docs.

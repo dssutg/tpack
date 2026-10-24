@@ -34,7 +34,7 @@ use config::{
     valid_map_format_strings, valid_packing_mode_strings, valid_scale_mode_strings,
     Default_Atlas_Height, Default_Atlas_Width, Pack_Options,
 };
-use tpack_cli::{CliError, parse_args as cli_parse_args};
+use cli_parser::{CliError, parse_args as cli_parse_args};
 
 
 // main parses arguments, validates them, runs the packing pipeline, and

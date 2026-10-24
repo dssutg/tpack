@@ -1,9 +1,9 @@
-//! tpack_hash provides stable, small hash functions for tpack's data
-//! formats (currently the FNV-1a family).
+//! hashing provides stable, small hash functions (currently the FNV-1a
+//! family).
 //!
 //! The functions here are pure byte-string hashers with no dependencies;
-//! their outputs are part of the `spr` sprite-bundle file format, so the
-//! algorithms and constants are frozen.
+//! their outputs are frozen because they are used in persisted file
+//! formats, where values must be stable across processes and platforms.
 
 /// fnv32a computes the 32-bit FNV-1a hash of a byte string.
 ///
@@ -13,18 +13,18 @@
 /// (`0x01000193`) are frozen constants from the original FNV-1a
 /// definition. Hashes of the empty string equal the offset basis.
 ///
-/// Used to key sprite entries in the binary `spr` output by their
-/// project-relative image paths, where the hash must match whatever a
-/// game runtime computes on its own data files.
+/// Hashes must be reproducible across processes and platforms: the
+/// output is meant to be persisted or independently recomputed by other
+/// programs, so only well-defined, stable hash functions qualify.
 ///
 /// ```
-/// # use tpack_hash::fnv32a;
+/// # use hashing::fnv32a;
 /// assert_eq!(fnv32a(b"hello"), 0x4f9f2cab);
 /// assert_eq!(fnv32a(b""), 2166136261);
 /// ```
 pub fn fnv32a(bytes: &[u8]) -> u32 {
     // Offset basis and prime are frozen FNV-1a constants; do not change
-    // them, hashed values appear in released spr files.
+    // them, hashed values may appear in released files.
     let mut hash = 2_166_136_261u32;
     for &b in bytes {
         hash ^= b as u32;

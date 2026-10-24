@@ -39,6 +39,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cli-parser"
+version = "0.1.0"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -66,6 +70,10 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
+
+[[package]]
+name = "hashing"
+version = "0.1.0"
 
 [[package]]
 name = "image"
@@ -153,19 +161,11 @@ name = "tpack"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cli-parser",
+ "hashing",
  "image",
  "rect_pack",
- "tpack_cli",
- "tpack_hash",
 ]
-
-[[package]]
-name = "tpack_cli"
-version = "0.1.0"
-
-[[package]]
-name = "tpack_hash"
-version = "0.1.0"
 
 [[package]]
 name = "zlib-rs"
