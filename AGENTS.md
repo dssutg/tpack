@@ -37,6 +37,10 @@ These rules apply to every crate under `lib/` (`rect_pack`, `cli-parser`, `hashi
 - **100% coverage, honestly:** tests target 100% line coverage of lib sources via `cargo llvm-cov --workspace` (install: `cargo install cargo-llvm-cov`). Prefer edge cases and indirect coverage through the public API over implementation-coupled tests. Code that truly cannot be covered carries an inline comment justifying why (e.g. defensive guards unreachable through the public API). Do not game the metric.
 - lib tests may not reference tpack's flag names or option structs either — they test the generic contracts.
 
+## Docs rules
+
+- **Always update stale docs:** any change that alters what the program is or does — CLI flags, defaults, exit codes, output formats, algorithms, behavior, or file layout — must update the affected docs in the same change: `README.md` (features, option table, formats, repository layout), `docs/spr-format-spec.md` when the `spr` format is touched, and this file when package layout or conventions change. Docs must describe what the program actually does; write against the code (flag table in `src/cli.rs` + `usage()`, or `cargo run -- -h`), not memory, and don't leave a code change that contradicts existing docs behind.
+
 ## Gotchas
 
 - **Rect packer dependency:** `lib/rect_pack` is a local path dependency (`rect_pack = { path = "lib/rect_pack" }`). Keep its API and algorithm in sync with `src/packer.rs`.
