@@ -6,13 +6,15 @@ Version: 1
 
 The `.spr` file is a binary companion to a packed texture atlas (`.png`).
 It stores the crop rectangles for every sprite that was packed into the
-atlas, keyed by the FNV-1a 32-bit hash of the sprite's source PNG filename
-(including its relative directory path from the project root).
+atlas, keyed by the FNV-1a 32-bit hash of a path string derived from the
+sprite's source PNG filename (see Sprite Hash Array below).
 The hash array is sorted ascending so that lookups use binary search at runtime.
 
-Each texture atlas directory in `assets/` produces one `.spr` file in
-`dist/`, named using a snake_case identifier derived from the directory
-path (e.g. `assets/units/christina` → `dist/units_christina.spr`).
+Each `.spr` file is produced by tpack via `--map-format spr` (or a
+`.spr` output path with `--map-format auto`). tpack writes the bundle to
+the exact `<sprite_map_path>` given on the command line — bundling
+conventions such as output-location or snake_case file naming are the
+calling pipeline's choice (see Companion Files for a typical layout).
 
 ## File Layout
 
@@ -58,11 +60,21 @@ to 4 bytes so `sprite_count` is naturally aligned).
 - **Size:** `sprite_count × 4` bytes
 - **Start offset:** 16 (immediately after header)
 
-Each entry is the **FNV-1a 32-bit hash** of the sprite's source PNG
-filename as an absolute path string (e.g. `"assets/units/christina/0001.png"`).
+Each entry is the **FNV-1a 32-bit hash** of a path string derived from
+the sprite's source PNG filename. The string tpack hashes is:
+
+- **Default (no `--spr-root`):** the sprite's path exactly as tpack
+  discovered it — i.e. the scanned path (root + name) as spelled on the
+  command line (e.g. `assets/units/christina/0001.png`).
+- **With `--spr-root <dir>`:** when the discovered path starts with `<dir>`,
+  that prefix — plus one immediately following `/` or `\` — is stripped
+  before hashing, so the hash is project-root-relative (with
+  `--spr-root assets`, `assets/units/christina/0001.png` hashes as
+  `units/christina/0001.png`). Paths that do not start with the root are
+  hashed in full.
 
 The hash is the standard FNV-1a 32-bit hash over the raw byte
-representation of the filename string.
+representation of the resulting path string.
 
 Entries are sorted in **ascending** hash order to enable binary search
 lookup at runtime (binary search).
@@ -97,13 +109,17 @@ Given a `Sprite_ID` (which is a `u32` FNV-1a hash of a sprite filename):
 
 ## Companion Files
 
-Each `.spr` file has a matching atlas image:
+Each `.spr` file pairs with the atlas PNG written in the same tpack run;
+both land at the output paths given on the command line. A typical
+consumer layout might look like:
 
 | Source directory           | Atlas image                | Sprite bundle              |
 |----------------------------|----------------------------|----------------------------|
 | `assets/units/christina/`  | `dist/units_christina.png` | `dist/units_christina.spr` |
 | `assets/gui/`              | `dist/gui.png`             | `dist/gui.spr`             |
 | `assets/tiles/`            | `dist/tiles.png`           | `dist/tiles.spr`           |
+
+(The naming above is the caller's convention, not something tpack enforces.)
 
 ## Notes
 

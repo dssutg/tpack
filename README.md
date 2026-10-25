@@ -5,10 +5,10 @@ A texture packing CLI written in [Rust](https://www.rust-lang.org). Packs `.png`
 ## Features
 
 - Recursively discovers PNG sprites in a directory (deterministic, sorted order).
-- Packs them into a configurable atlas using the skyline algorithm (bottom-left or best-fit heuristics) from the bundled `lib/rect_pack` crate.
+- Packs them into a configurable atlas using one of seven packing strategies (`skyline`, `skyline-bf`, `skyline-fast`, `genetic`, `maxrects`, `guillotine`, `best`) from the bundled `lib/rect_pack` crate.
 - Configurable per-sprite padding to prevent edge bleeding.
 - Outputs the atlas as a PNG plus a sprite map in one of several formats (C, JSON, SSM, binary SPR).
-- Parallel sprite decoding and atlas compositing via `--threads` (defaults to every available core); the deterministic skyline placement itself remains sequential.
+- Parallel sprite decoding and atlas compositing via `--threads` (defaults to every available core); placement itself remains sequential and deterministic.
 - No-overwrite guard and progress reporting to stderr.
 
 ## Requirements
@@ -50,7 +50,10 @@ Options:
 | `--no-auto-size`        |            | Use the explicit/default `--width`/`--height` instead of auto-sizing              |
 | `--spr-root <dir>`      |            | Project root: `spr` hash paths relative to this directory                         |
 | `--sprite-padding <n>`  | `0`        | Padding pixels around each sprite (0–128)                                         |
-| `--heuristic <h>`       | `bl`       | Packing heuristic: `bl` (bottom-left, fast) or `bf` (best-fit, tighter)           |
+| `--packing-mode <m>`    | `skyline`  | Packing algorithm: `skyline`, `skyline-bf`, `skyline-fast`, `genetic`, `maxrects`, `guillotine`, or `best`; aliases `--algorithm` / `--pack-algorithm` |
+| `--seed <n>`            | `123456789`| Seed for the `genetic` packing mode                                               |
+| `--genetic-pop <n>`     | `40`       | Population size for the `genetic` packing mode                                    |
+| `--genetic-gens <n>`    | `60`       | Generations for the `genetic` packing mode                                        |
 | `--threads <n>`         | all cores  | Worker threads for decoding/compositing (minimum: 1)                              |
 | `--scale-mode <m>`      | `linear`   | SPR atlas scale mode: `nearest`, `linear`, or `pixel-art`                         |
 | `--no-sort`             |            | Disable largest-first pre-sorting                                                 |
@@ -64,7 +67,7 @@ Options:
 
 The sprite map format is inferred from the output file extension when `--map-format auto` (the default): `.json`, `.ssm`, `.c`, and `.spr` are recognized; `structured-c` requires the explicit flag.
 
-Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--height` are explicitly provided, which disables it), the tool ignores `--width`/`--height` and probes increasing square power-of-two sizes (64 → 128 → … up to 4096) until the skyline packer fits every sprite, then uses the smallest size that works. This is handy when the sprite set varies or you always want the tightest GPU-friendly texture. A sprite wider or taller than 4096 (or a set that outgrows 4096×4096) can never fit and is reported as an `AtlasTooSmall` error.
+Auto-sizing is the default: unless `--no-auto-size` is given (or `--width`/`--height` are explicitly provided, which disables it), the tool ignores `--width`/`--height` and probes increasing square power-of-two sizes (64 → 128 → … up to 4096) until the configured packing mode fits every sprite, then uses the smallest size that works. This is handy when the sprite set varies or you always want the tightest GPU-friendly texture. A sprite wider or taller than 4096 (or a set that outgrows 4096×4096) can never fit and is reported as an `AtlasTooSmall` error.
 
 ### Sprite map formats
 
@@ -102,6 +105,7 @@ A Makefile provides common targets:
 ```
 make build     # compile ./target/release/tpack
 make vet       # run clippy, denying warnings
+make test      # run unit tests for the whole workspace
 make harness   # run the integration harness (pack test/sprites)
 make clean     # remove build artifacts
 make install   # install to $(PREFIX)/bin (default /usr/local)
@@ -112,7 +116,7 @@ Override the toolchain with `make CARGO=/path/to/cargo`.
 
 ## Testing
 
-Unit tests cover the rectangle packer (`lib/rect_pack`); run them with `cargo test --workspace`. Integration coverage is provided by `tests/harness.rs`, a harness that spawns the built tool against the fixtures in `test/sprites/`:
+Unit tests cover the bundled lib crates (`lib/rect_pack`, `lib/cli-parser`, `lib/hashing`); run them with `cargo test --workspace`. Integration coverage is provided by `tests/harness.rs`, a harness that spawns the built tool against the fixtures in `test/sprites/`:
 
 ```
 make harness       # or: cargo test --test harness -- --nocapture
@@ -122,21 +126,24 @@ This regenerates the harness outputs under `test/textures/`. Reference outputs (
 
 ## Repository Layout
 
-The tool is a single Rust crate (`tpack`) split across modules by concern, plus the bundled packer crate:
+The tool is a single Rust crate (`tpack`) split across modules by concern, plus three bundled general-purpose lib crates:
 
-| File                | Responsibility                                         |
-|---------------------|--------------------------------------------------------|
-| `src/main.rs`       | CLI parsing + entry point                              |
-| `src/config.rs`     | constants, enums, option structs                       |
-| `src/atlas.rs`      | packing orchestration + atlas PNG output               |
-| `src/sprites.rs`    | sprite discovery + decoding                            |
-| `src/packer.rs`     | skyline rect packing + parallel pixel compositing      |
-| `src/parallel.rs`   | scoped-thread helpers for decoding/compositing         |
-| `src/sprite_map.rs` | sprite map output writers (C/JSON/SSM/SPR)             |
-| `src/incremental.rs`| mtime-based output staleness check for `--incremental` |
-| `src/util.rs`       | shared helpers (escaping, identifier checks)           |
-| `lib/rect_pack/`    | standalone skyline rectangle packer crate              |
-| `tests/harness.rs`  | process-spawning integration harness                   |
+| File                | Responsibility                                          |
+|---------------------|---------------------------------------------------------|
+| `src/main.rs`       | CLI entry point + option resolution                     |
+| `src/cli.rs`        | CLI surface: `Options` struct, flag table, usage text    |
+| `src/config.rs`     | constants, `Map_Format` enum, string→format helpers      |
+| `src/atlas.rs`      | packing orchestration + atlas PNG output                |
+| `src/sprites.rs`    | sprite discovery + decoding                             |
+| `src/packer.rs`     | skyline rect packing + parallel pixel compositing       |
+| `src/parallel.rs`   | scoped-thread helpers for decoding/compositing          |
+| `src/sprite_map.rs` | sprite map output writers (C/JSON/SSM/SPR)              |
+| `src/incremental.rs`| mtime-based output staleness check for `--incremental`  |
+| `src/util.rs`       | shared helpers (escaping, identifier checks)            |
+| `lib/rect_pack/`    | standalone rectangle packer crate (skyline + more)      |
+| `lib/cli-parser/`   | generic option parser (no tpack flag knowledge)         |
+| `lib/hashing/`      | FNV-1a hashing (used by the `spr` format)               |
+| `tests/harness.rs`  | process-spawning integration harness                    |
 
 ## License
 
